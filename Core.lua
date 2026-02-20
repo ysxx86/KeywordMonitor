@@ -758,6 +758,68 @@ function KM:CleanOldData()
 	if cleaned > 0 then
 		print("|cff00FF00[ChatKeyword]|r 已清理 " .. cleaned .. " 天的旧数据")
 	end
+	
+	-- 额外的内存优化
+	KM:OptimizeMemory()
+end
+
+-- 内存优化
+function KM:OptimizeMemory()
+	EnsureConfig()
+	
+	-- 1. 限制历史记录
+	if #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount then
+		while #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount do
+			tremove(KeywordMonitorDB.History)
+		end
+	end
+	
+	-- 2. 清理智能学习低频词（出现次数<2）
+	local wordCount = 0
+	for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
+		if count < 2 then
+			KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
+		else
+			wordCount = wordCount + 1
+		end
+	end
+	
+	-- 如果词频表还是太大，只保留高频词
+	if wordCount > 200 then
+		local words = {}
+		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
+			tinsert(words, {word = word, count = count})
+		end
+		table.sort(words, function(a, b) return a.count > b.count end)
+		
+		KeywordMonitorDB.SmartLearning.WordFrequency = {}
+		for i = 1, math.min(200, #words) do
+			KeywordMonitorDB.SmartLearning.WordFrequency[words[i].word] = words[i].count
+		end
+	end
+	
+	-- 3. 清理关键词关联低频数据（关联次数<3）
+	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+		for kw2, count in pairs(correlations) do
+			if count < 3 then
+				correlations[kw2] = nil
+			end
+		end
+		if KM:GetTableSize(correlations) == 0 then
+			KeywordMonitorDB.KeywordCorrelation[kw1] = nil
+		end
+	end
+	
+	-- 4. 清理重复消息缓存（超过5分钟的）
+	local currentTime = GetTime()
+	for text, timestamp in pairs(repeatMessageCache) do
+		if currentTime - timestamp > 300 then
+			repeatMessageCache[text] = nil
+		end
+	end
+	
+	-- 5. 强制垃圾回收
+	collectgarbage("collect")
 end
 
 -- 检查是否需要显示更新日志
@@ -2797,6 +2859,23 @@ function KM:UpdateKeywordCorrelation(keywords)
 	-- 如果只有一个关键词，无需记录关联
 	if #keywords < 2 then return end
 	
+	-- 限制关联表大小
+	local maxKeywords = 50
+	if KM:GetTableSize(KeywordMonitorDB.KeywordCorrelation) > maxKeywords then
+		-- 清理关联次数<3的数据
+		for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+			for kw2, count in pairs(correlations) do
+				if count < 3 then
+					correlations[kw2] = nil
+				end
+			end
+			-- 如果该关键词没有关联了，删除整个条目
+			if KM:GetTableSize(correlations) == 0 then
+				KeywordMonitorDB.KeywordCorrelation[kw1] = nil
+			end
+		end
+	end
+	
 	-- 记录每对关键词的关联
 	for i = 1, #keywords do
 		local kw1 = keywords[i]
@@ -2930,8 +3009,24 @@ function KM:LearnFromMessage(msg)
 		return
 	end
 	
+	-- 限制词频表大小，避免无限增长
+	local maxWords = 200
+	if self:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency) > maxWords then
+		-- 清理低频词（出现次数<2的）
+		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
+			if count < 2 then
+				KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
+			end
+		end
+	end
+	
 	-- 清理消息文本
 	local cleanMsg = CleanText(msg)
+	
+	-- 限制消息长度，避免处理过长消息
+	if #cleanMsg > 200 then
+		cleanMsg = sub(cleanMsg, 1, 200)
+	end
 	
 	-- 提取2-4个字符的词汇（中文通常是2-4个字）
 	for i = 1, #cleanMsg do
@@ -2962,6 +3057,64 @@ function KM:LearnFromMessage(msg)
 	
 	-- 检查是否需要显示建议
 	KM:CheckAndShowSuggestions()
+end
+
+-- 获取表大小
+function KM:GetTableSize(t)
+	local count = 0
+	for _ in pairs(t) do
+		count = count + 1
+	end
+	return count
+end
+
+-- 诊断内存占用
+function KM:DiagnoseMemory()
+	EnsureConfig()
+	
+	print("|cff00FF00[ChatKeyword 内存诊断]|r")
+	print("----------------------------------------")
+	
+	-- 历史记录
+	local historyCount = #KeywordMonitorDB.History
+	print(string.format("历史记录: %d 条", historyCount))
+	
+	-- 趋势数据
+	local dailyCount = KM:GetTableSize(KeywordMonitorDB.TrendData.Daily)
+	local hourlyCount = KM:GetTableSize(KeywordMonitorDB.TrendData.Hourly)
+	print(string.format("趋势数据: 每日 %d 天, 每小时 %d 条", dailyCount, hourlyCount))
+	
+	-- 智能学习
+	local wordCount = KM:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency)
+	print(string.format("智能学习: %d 个词汇", wordCount))
+	
+	-- 关键词关联
+	local correlationCount = 0
+	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+		correlationCount = correlationCount + KM:GetTableSize(correlations)
+	end
+	print(string.format("关键词关联: %d 条关联", correlationCount))
+	
+	-- 统计数据
+	local keywordStatsCount = KM:GetTableSize(KeywordMonitorDB.Statistics.KeywordCounts)
+	print(string.format("统计数据: %d 个关键词", keywordStatsCount))
+	
+	-- 重复消息缓存
+	local cacheCount = KM:GetTableSize(repeatMessageCache)
+	print(string.format("重复消息缓存: %d 条", cacheCount))
+	
+	print("----------------------------------------")
+	print("|cffFFFF00建议：|r")
+	if historyCount > 50 then
+		print("  • 历史记录较多，可减少保留数量")
+	end
+	if wordCount > 100 then
+		print("  • 智能学习词汇过多，建议清理或关闭")
+	end
+	if correlationCount > 200 then
+		print("  • 关键词关联数据过多，建议清理")
+	end
+	print("  • 点击'优化内存'按钮进行清理")
 end
 
 -- 记录词汇频率
@@ -4777,6 +4930,29 @@ function KM:ShowPerformanceUI()
 			KM:RefreshPerformance()
 		end)
 		
+		-- 优化内存按钮
+		local optimizeBtn = CreateButton(frame, 120, 25, "优化内存")
+		optimizeBtn:SetPoint("LEFT", cleanNowBtn, "RIGHT", 10, 0)
+		optimizeBtn:SetScript("OnClick", function()
+			KM:OptimizeMemory()
+			C_Timer.After(0.5, function()
+				KM:RefreshPerformance()
+				print("|cff00FF00[ChatKeyword]|r 内存优化完成")
+			end)
+		end)
+		
+		-- 诊断按钮
+		local diagnoseBtn = CreateButton(frame, 120, 25, "内存诊断")
+		diagnoseBtn:SetPoint("TOPLEFT", 20, -290)
+		diagnoseBtn:SetScript("OnClick", function()
+			KM:DiagnoseMemory()
+		end)
+		
+		-- 内存优化说明
+		local optimizeHint = CreateFS(frame, 10, "清理低频数据、强制垃圾回收", false, "LEFT")
+		optimizeHint:SetPoint("TOPLEFT", 20, -320)
+		optimizeHint:SetTextColor(0.7, 0.7, 0.7)
+		
 		-- 刷新按钮
 		local refreshBtn = CreateButton(frame, 80, 25, "刷新")
 		refreshBtn:SetPoint("BOTTOM", 0, 15)
@@ -5053,6 +5229,11 @@ function KM:Init()
 		C_Timer.NewTicker(86400, function()
 			KM:CleanOldData()
 		end)
+		
+		-- 每小时优化一次内存
+		C_Timer.NewTicker(3600, function()
+			KM:OptimizeMemory()
+		end)
 	end)
 	
 	local eventFrame = CreateFrame("Frame")
@@ -5103,6 +5284,16 @@ function KM:Init()
 					end
 				end
 			end
+		elseif cmd == "memory" or cmd == "内存" then
+			KM:DiagnoseMemory()
+		elseif cmd == "optimize" or cmd == "优化" then
+			print("|cff00FF00[ChatKeyword]|r 正在优化内存...")
+			KM:OptimizeMemory()
+			C_Timer.After(0.5, function()
+				print("|cff00FF00[ChatKeyword]|r 内存优化完成")
+				local memory = KM:GetMemoryUsage()
+				print(string.format("|cff00FF00[ChatKeyword]|r 当前内存: %.2f KB", memory))
+			end)
 		elseif cmd == "config" or cmd == "配置" or cmd == "" then
 			if not configFrame then
 				CreateConfigFrame()
@@ -5118,6 +5309,8 @@ function KM:Init()
 			print("  /keyword off - 关闭提取")
 			print("  /keyword set 关键词1,关键词2 - 设置关键词")
 			print("  /keyword debug - 显示当前关键词解析结果")
+			print("  /keyword memory - 内存诊断")
+			print("  /keyword optimize - 优化内存")
 			print("  /keyword config - 打开配置界面")
 		end
 	end
