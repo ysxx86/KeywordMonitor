@@ -1,4 +1,4 @@
-# ChatKeyword - 聊天关键词提取过滤
+# KeywordMonitor - 聊天关键词提取过滤
 
 聊天关键词提取过滤插件，支持 NDui 美化和原生 UI。
 
