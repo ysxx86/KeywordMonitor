@@ -451,60 +451,77 @@ local function CleanupUIElements(elements)
 	for i = #elements, 1, -1 do
 		local element = elements[i]
 		if element then
-			-- 清理所有SetScript
+			-- 安全地清理所有SetScript（使用pcall避免错误）
 			if element.SetScript then
-				element:SetScript("OnClick", nil)
-				element:SetScript("OnEnter", nil)
-				element:SetScript("OnLeave", nil)
-				element:SetScript("OnTextChanged", nil)
-				element:SetScript("OnShow", nil)
-				element:SetScript("OnHide", nil)
+				pcall(function() element:SetScript("OnClick", nil) end)
+				pcall(function() element:SetScript("OnEnter", nil) end)
+				pcall(function() element:SetScript("OnLeave", nil) end)
+				pcall(function() element:SetScript("OnTextChanged", nil) end)
+				pcall(function() element:SetScript("OnShow", nil) end)
+				pcall(function() element:SetScript("OnHide", nil) end)
+				pcall(function() element:SetScript("OnEnterPressed", nil) end)
+				pcall(function() element:SetScript("OnEditFocusLost", nil) end)
 			end
 			-- 隐藏并移除
-			element:Hide()
-			element:SetParent(nil)
-			element:ClearAllPoints()
+			if element.Hide then element:Hide() end
+			if element.SetParent then element:SetParent(nil) end
+			if element.ClearAllPoints then element:ClearAllPoints() end
 		end
 	end
 	-- 使用 wipe 清空表而不是创建新表
 	wipe(elements)
 end
 
--- 高亮关键词（优化版 - 避免创建临时表）
+-- 高亮关键词（支持多关键词高亮）
 local function HighlightKeyword(msg, matchedKeyword)
 	if not matchedKeyword or not msg then return msg end
 	
-	-- 获取要高亮的关键词（避免创建新表）
-	local keywordToHighlight
+	-- 收集所有需要高亮的关键词
+	local keywordsToHighlight = {}
 	
 	if type(matchedKeyword) == "string" then
-		keywordToHighlight = matchedKeyword
+		tinsert(keywordsToHighlight, matchedKeyword)
 	elseif type(matchedKeyword) == "table" then
-		-- 只取第一个非排除的关键词
+		-- 收集所有非排除的关键词
 		for i = 1, #matchedKeyword do
 			local kw = matchedKeyword[i]
 			if sub(kw, 1, 1) ~= "&" then
-				keywordToHighlight = kw
-				break
+				tinsert(keywordsToHighlight, kw)
 			end
 		end
 	end
 	
-	if not keywordToHighlight then return msg end
+	if #keywordsToHighlight == 0 then return msg end
 	
-	-- 简单的高亮处理 - 只高亮第一次出现
+	-- 高亮所有匹配的关键词
 	local upperMsg = upper(msg)
-	local upperKeyword = upper(keywordToHighlight)
-	local startPos = find(upperMsg, upperKeyword, 1, true)
+	local result = msg
 	
-	if startPos then
-		local endPos = startPos + #keywordToHighlight - 1
-		local originalKeyword = sub(msg, startPos, endPos)
-		-- 直接拼接，避免创建中间字符串
-		return sub(msg, 1, startPos - 1) .. "|cff00FF00" .. originalKeyword .. "|r" .. sub(msg, endPos + 1)
+	-- 收集所有匹配位置
+	local matches = {}
+	for _, keyword in ipairs(keywordsToHighlight) do
+		local upperKeyword = upper(keyword)
+		local startPos = 1
+		while true do
+			local pos = find(upperMsg, upperKeyword, startPos, true)
+			if not pos then break end
+			tinsert(matches, {pos = pos, len = #keyword})
+			startPos = pos + 1
+		end
 	end
 	
-	return msg
+	-- 按位置排序（从后往前，避免位置偏移）
+	sort(matches, function(a, b) return a.pos > b.pos end)
+	
+	-- 应用高亮
+	for _, match in ipairs(matches) do
+		local startPos = match.pos
+		local endPos = startPos + match.len - 1
+		local originalKeyword = sub(result, startPos, endPos)
+		result = sub(result, 1, startPos - 1) .. "|cff00FF00" .. originalKeyword .. "|r" .. sub(result, endPos + 1)
+	end
+	
+	return result
 end
 
 -- 检查是否匹配关键词
@@ -1181,12 +1198,19 @@ local function CreateConfigFrame()
 	keywordBox:SetMaxLetters(500)
 	keywordBox:SetText(KeywordMonitorDB.Keywords)
 	
-	C_Timer.After(0, function()
-		keywordBox:SetScript("OnTextChanged", function(self)
-			local text = self:GetText()
-			KeywordMonitorDB.Keywords = text
-			KM:UpdateKeywordList(text)
-		end)
+	-- 只在回车或失去焦点时保存
+	keywordBox:SetScript("OnEnterPressed", function(self)
+		local text = self:GetText()
+		KeywordMonitorDB.Keywords = text
+		KM:UpdateKeywordList(text)
+		self:ClearFocus()
+		print("|cff00FF00[ChatKeyword]|r 关键词已更新")
+	end)
+	
+	keywordBox:SetScript("OnEditFocusLost", function(self)
+		local text = self:GetText()
+		KeywordMonitorDB.Keywords = text
+		KM:UpdateKeywordList(text)
 	end)
 	
 	local helpText1 = CreateFS(frame, 12, "关键词规则（用逗号分隔）：", false, "LEFT")
@@ -2131,6 +2155,10 @@ function KM:RemoveKeywordGroup(index)
 		local name = KeywordMonitorDB.KeywordGroups[index].name
 		tremove(KeywordMonitorDB.KeywordGroups, index)
 		print("|cff00FF00[ChatKeyword]|r 已删除关键词组: " .. name)
+		-- 删除后更新关键词列表
+		KM:UpdateKeywordList()
+	else
+		print("|cffFF0000[ChatKeyword]|r 删除失败: 无效的索引 " .. tostring(index))
 	end
 end
 
@@ -2211,9 +2239,22 @@ function KM:ShowKeywordGroupsUI()
 		useGroupLabel:SetTextColor(1, 0.8, 0)
 		
 		useGroupCheck:SetScript("OnClick", function(self)
-			KeywordMonitorDB.UseKeywordGroups = self:GetChecked()
-			KM:UpdateKeywordList()
-			print("|cff00FF00[ChatKeyword]|r 分组模式: " .. (KeywordMonitorDB.UseKeywordGroups and "|cff00FF00已启用|r" or "|cffFF0000已禁用|r"))
+			local isEnabled = self:GetChecked()
+			
+			-- 如果从分组模式切换到传统模式，保留传统模式的关键词
+			-- 如果从传统模式切换到分组模式，保留分组设置
+			KeywordMonitorDB.UseKeywordGroups = isEnabled
+			
+			-- 更新关键词列表（会根据当前模式自动选择使用分组或传统关键词）
+			if isEnabled then
+				-- 切换到分组模式
+				KM:UpdateKeywordList()
+			else
+				-- 切换到传统模式，使用保存的传统关键词
+				KM:UpdateKeywordList(KeywordMonitorDB.Keywords)
+			end
+			
+			print("|cff00FF00[ChatKeyword]|r 分组模式: " .. (isEnabled and "|cff00FF00已启用|r" or "|cffFF0000已禁用|r"))
 		end)
 		
 		-- 分组列表滚动框
@@ -2223,6 +2264,7 @@ function KM:ShowKeywordGroupsUI()
 		
 		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
 		scrollChild:SetSize(540, 1)
+		scrollChild.groups = {}  -- 初始化groups表
 		scrollFrame:SetScrollChild(scrollChild)
 		frame.scrollChild = scrollChild
 		
@@ -2257,9 +2299,30 @@ function KM:ShowKeywordGroupsUI()
 		
 		-- 刷新列表函数
 		function KM:RefreshGroupsList()
+			print("|cffFFFF00[Debug]|r RefreshGroupsList 被调用")
+			
+			-- 使用保存在frame上的scrollChild
+			local scrollChild = self.groupsFrame and self.groupsFrame.scrollChild
+			if not scrollChild then
+				print("|cffFF0000[ChatKeyword]|r 刷新失败: scrollChild不存在")
+				print("|cffFF0000[Debug]|r self.groupsFrame = " .. tostring(self.groupsFrame))
+				return
+			end
+			
+			print("|cffFFFF00[Debug]|r scrollChild 存在，开始清理")
+			
+			-- 确保groups表存在
+			if not scrollChild.groups then
+				scrollChild.groups = {}
+			end
+			
+			print("|cffFFFF00[Debug]|r 清理前 groups 数量: " .. #scrollChild.groups)
+			
 			-- 清除旧的UI元素（使用通用清理函数）
 			CleanupUIElements(scrollChild.groups)
 			scrollChild.groups = {}
+			
+			print("|cffFFFF00[Debug]|r 清理后，准备重建，分组数量: " .. #KeywordMonitorDB.KeywordGroups)
 			
 			local yOffset = -10
 			for i, group in ipairs(KeywordMonitorDB.KeywordGroups) do
@@ -2287,12 +2350,15 @@ function KM:ShowKeywordGroupsUI()
 					groupFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
 				end
 				
+				-- 使用局部变量保存当前索引，避免闭包问题
+				local currentIndex = i
+				
 				-- 启用复选框
 				local enableCheck = CreateCheckBox(groupFrame)
 				enableCheck:SetPoint("TOPLEFT", 5, -5)
 				enableCheck:SetChecked(group.enabled)
 				enableCheck:SetScript("OnClick", function(self)
-					KM:UpdateKeywordGroup(i, nil, nil, self:GetChecked())
+					KM:UpdateKeywordGroup(currentIndex, nil, nil, self:GetChecked())
 					KM:UpdateKeywordList()
 				end)
 				groupFrame.enableCheck = enableCheck
@@ -2301,17 +2367,30 @@ function KM:ShowKeywordGroupsUI()
 				local nameBox = CreateEditBox(groupFrame, 150, 25)
 				nameBox:SetPoint("LEFT", enableCheck, "RIGHT", 5, 0)
 				nameBox:SetText(group.name)
-				nameBox:SetScript("OnTextChanged", function(self)
-					KM:UpdateKeywordGroup(i, self:GetText())
+				
+				-- 只在回车或失去焦点时保存
+				nameBox:SetScript("OnEnterPressed", function(self)
+					KM:UpdateKeywordGroup(currentIndex, self:GetText())
+					self:ClearFocus()
 				end)
+				
+				nameBox:SetScript("OnEditFocusLost", function(self)
+					KM:UpdateKeywordGroup(currentIndex, self:GetText())
+				end)
+				
 				groupFrame.nameBox = nameBox
 				
 				-- 删除按钮
 				local delBtn = CreateButton(groupFrame, 50, 20, "删除")
 				delBtn:SetPoint("TOPRIGHT", -5, -5)
 				delBtn:SetScript("OnClick", function()
-					KM:RemoveKeywordGroup(i)
+					print("|cffFFFF00[Debug]|r 删除按钮被点击，索引: " .. currentIndex)
+					print("|cffFFFF00[Debug]|r 删除前分组数量: " .. #KeywordMonitorDB.KeywordGroups)
+					KM:RemoveKeywordGroup(currentIndex)
+					print("|cffFFFF00[Debug]|r 删除后分组数量: " .. #KeywordMonitorDB.KeywordGroups)
+					print("|cffFFFF00[Debug]|r 准备调用 RefreshGroupsList")
 					KM:RefreshGroupsList()
+					print("|cffFFFF00[Debug]|r RefreshGroupsList 调用完成")
 				end)
 				groupFrame.delBtn = delBtn
 				
@@ -2322,10 +2401,19 @@ function KM:ShowKeywordGroupsUI()
 				local kwBox = CreateEditBox(groupFrame, 490, 25)
 				kwBox:SetPoint("TOPLEFT", 10, -50)
 				kwBox:SetText(group.keywords)
-				kwBox:SetScript("OnTextChanged", function(self)
-					KM:UpdateKeywordGroup(i, nil, self:GetText())
+				
+				-- 只在回车或失去焦点时保存
+				kwBox:SetScript("OnEnterPressed", function(self)
+					KM:UpdateKeywordGroup(currentIndex, nil, self:GetText())
+					KM:UpdateKeywordList()
+					self:ClearFocus()
+				end)
+				
+				kwBox:SetScript("OnEditFocusLost", function(self)
+					KM:UpdateKeywordGroup(currentIndex, nil, self:GetText())
 					KM:UpdateKeywordList()
 				end)
+				
 				groupFrame.kwBox = kwBox
 				
 				tinsert(scrollChild.groups, groupFrame)
@@ -3989,6 +4077,17 @@ function KM:ShowPresetsUI()
 		local saveNameBox = CreateEditBox(frame, 200, 25)
 		saveNameBox:SetPoint("LEFT", saveLabel, "RIGHT", 5, 0)
 		
+		-- 支持回车键保存
+		saveNameBox:SetScript("OnEnterPressed", function(self)
+			local name = self:GetText()
+			if name and name ~= "" then
+				KM:SaveAsPreset(name, "")
+				self:SetText("")
+				KM:RefreshPresetsList()
+				self:ClearFocus()
+			end
+		end)
+		
 		local saveBtn = CreateButton(frame, 60, 25, "保存")
 		saveBtn:SetPoint("LEFT", saveNameBox, "RIGHT", 5, 0)
 		saveBtn:SetScript("OnClick", function()
@@ -4002,6 +4101,23 @@ function KM:ShowPresetsUI()
 		
 		-- 刷新预设列表
 		function KM:RefreshPresetsList()
+			-- 使用保存在frame上的child
+			local builtinChild = self.presetsFrame.builtinChild
+			local userChild = self.presetsFrame.userChild
+			
+			if not builtinChild or not userChild then
+				print("|cffFF0000[ChatKeyword]|r 刷新失败: child不存在")
+				return
+			end
+			
+			-- 初始化items表（如果不存在）
+			if not builtinChild.items then
+				builtinChild.items = {}
+			end
+			if not userChild.items then
+				userChild.items = {}
+			end
+			
 			-- 清空内置预设
 			CleanupUIElements(builtinChild.items)
 			builtinChild.items = {}
@@ -4045,7 +4161,7 @@ function KM:ShowPresetsUI()
 				applyBtn:SetPoint("TOPRIGHT", -10, -10)
 				applyBtn:SetScript("OnClick", function()
 					KM:ApplyPreset(preset)
-					frame:Hide()
+					self.presetsFrame:Hide()
 					if self.groupsFrame then
 						self.groupsFrame:Hide()
 						C_Timer.After(0.1, function()
@@ -4100,11 +4216,14 @@ function KM:ShowPresetsUI()
 					nameText:SetPoint("LEFT", 10, 0)
 					nameText:SetTextColor(0, 1, 0)
 					
+					-- 使用局部变量保存当前索引，避免闭包问题
+					local currentIndex = i
+					
 					local applyBtn = CreateButton(itemFrame, 60, 25, "应用")
 					applyBtn:SetPoint("RIGHT", -75, 0)
 					applyBtn:SetScript("OnClick", function()
 						KM:ApplyPreset(preset)
-						frame:Hide()
+						self.presetsFrame:Hide()
 						if self.groupsFrame then
 							self.groupsFrame:Hide()
 							C_Timer.After(0.1, function()
@@ -4116,7 +4235,7 @@ function KM:ShowPresetsUI()
 					local delBtn = CreateButton(itemFrame, 60, 25, "删除")
 					delBtn:SetPoint("RIGHT", -10, 0)
 					delBtn:SetScript("OnClick", function()
-						KM:DeletePreset(i)
+						KM:DeletePreset(currentIndex)
 						KM:RefreshPresetsList()
 					end)
 					
