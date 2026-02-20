@@ -66,7 +66,21 @@ local defaultConfig = {
 	Blacklist = {
 		Players = {},     -- 玩家黑名单 {["玩家名"] = true}
 		Keywords = {},    -- 关键词黑名单 {["关键词"] = true}
-	}
+	},
+	-- 关键词分组
+	KeywordGroups = {
+		{name = "默认组", keywords = "", enabled = true, color = {0, 1, 0}},
+	},
+	UseKeywordGroups = false,  -- 是否使用分组模式
+	-- 历史记录
+	History = {},  -- 最近的匹配消息
+	HistoryMaxCount = 100,  -- 最多保存100条
+	-- 快速回复
+	QuickReplies = {
+		"有兴趣，密我",
+		"什么价格？",
+		"还在吗？",
+	},
 }
 
 -- 初始化配置
@@ -100,6 +114,21 @@ local function EnsureConfig()
 	end
 	if not KeywordMonitorDB.Blacklist.Keywords then
 		KeywordMonitorDB.Blacklist.Keywords = {}
+	end
+	if not KeywordMonitorDB.KeywordGroups then
+		KeywordMonitorDB.KeywordGroups = defaultConfig.KeywordGroups
+	end
+	if not KeywordMonitorDB.History then
+		KeywordMonitorDB.History = {}
+	end
+	if not KeywordMonitorDB.QuickReplies then
+		KeywordMonitorDB.QuickReplies = defaultConfig.QuickReplies
+	end
+	if KeywordMonitorDB.UseKeywordGroups == nil then
+		KeywordMonitorDB.UseKeywordGroups = false
+	end
+	if not KeywordMonitorDB.HistoryMaxCount then
+		KeywordMonitorDB.HistoryMaxCount = 100
 	end
 end
 
@@ -216,10 +245,10 @@ local function IsBlacklisted(name, text)
 	
 	-- 检查关键词黑名单
 	if text then
-		local cleanText = CleanText(text)
+		local cleanedText = CleanText(text)
 		for keyword, _ in pairs(KeywordMonitorDB.Blacklist.Keywords) do
 			local cleanKeyword = upper(keyword)
-			if find(cleanText, cleanKeyword, 1, true) then
+			if find(cleanedText, cleanKeyword, 1, true) then
 				return true
 			end
 		end
@@ -228,23 +257,24 @@ local function IsBlacklisted(name, text)
 	return false
 end
 
--- 检查是否是重复消息
+-- 检查是否是重复消息（使用哈希表优化）
 local function IsRepeatMessage(text)
 	local currentTime = GetTime()
 	
-	for i = #repeatMessageCache, 1, -1 do
-		if currentTime - repeatMessageCache[i].time > 60 then
-			tremove(repeatMessageCache, i)
+	-- 清理过期的缓存（60秒前的）
+	for cachedText, timestamp in pairs(repeatMessageCache) do
+		if currentTime - timestamp > 60 then
+			repeatMessageCache[cachedText] = nil
 		end
 	end
 	
-	for _, cache in ipairs(repeatMessageCache) do
-		if cache.text == text then
-			return true
-		end
+	-- 检查是否重复
+	if repeatMessageCache[text] then
+		return true
 	end
 	
-	tinsert(repeatMessageCache, {text = text, time = currentTime})
+	-- 添加到缓存
+	repeatMessageCache[text] = currentTime
 	return false
 end
 
@@ -368,6 +398,70 @@ end
 -- 更新关键词列表
 function KM:UpdateKeywordList(keywordStr)
 	keywords = {}
+	
+	EnsureConfig()
+	
+	-- 如果启用了分组模式，使用分组关键词
+	if KeywordMonitorDB.UseKeywordGroups then
+		for _, group in ipairs(KeywordMonitorDB.KeywordGroups) do
+			if group.enabled and group.keywords and group.keywords ~= "" then
+				local groupKeywordStr = group.keywords
+				groupKeywordStr = gsub(groupKeywordStr, "，", ",")
+				groupKeywordStr = gsub(groupKeywordStr, "＋", "+")
+				
+				local list = SplitString(groupKeywordStr, ",")
+				
+				for _, word in ipairs(list) do
+					if match(word, "&") or match(word, "#") or match(word, "+") then
+						local subList = {}
+						local currentWord = ""
+						local isExclude = false
+						
+						for i = 1, #word do
+							local char = sub(word, i, i)
+							
+							if char == "+" or char == "#" then
+								currentWord = gsub(currentWord, "^%s*(.-)%s*$", "%1")
+								if currentWord ~= "" then
+									tinsert(subList, upper(currentWord))
+								end
+								currentWord = ""
+								isExclude = false
+							elseif char == "&" then
+								currentWord = gsub(currentWord, "^%s*(.-)%s*$", "%1")
+								if currentWord ~= "" then
+									tinsert(subList, upper(currentWord))
+								end
+								currentWord = ""
+								isExclude = true
+							else
+								currentWord = currentWord .. char
+							end
+						end
+						
+						currentWord = gsub(currentWord, "^%s*(.-)%s*$", "%1")
+						if currentWord ~= "" then
+							if isExclude then
+								tinsert(subList, "&" .. upper(currentWord))
+							else
+								tinsert(subList, upper(currentWord))
+							end
+						end
+						
+						if #subList > 0 then
+							tinsert(keywords, subList)
+						end
+					else
+						local upperWord = upper(word)
+						tinsert(keywords, upperWord)
+					end
+				end
+			end
+		end
+		return
+	end
+	
+	-- 传统模式：使用单一关键词字符串
 	if not keywordStr or keywordStr == "" then return end
 	
 	keywordStr = gsub(keywordStr, "，", ",")
@@ -572,6 +666,20 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 			keywordFrame:AddMessage(output, r, g, b)
 		end
 	end
+	
+	-- 保存到历史记录
+	KM:AddToHistory({
+		time = time,
+		timeStr = timeStr,
+		author = author,
+		name = name,
+		msg = msg,
+		outMsg = outMsg,
+		channelName = channelName,
+		keyword = keyword,
+		event = event,
+		r = r, g = g, b = b,
+	})
 	
 	if KeywordMonitorDB.AudioEnabled then
 		PlaySoundFile("Interface\\AddOns\\KeywordMonitor\\Audio\\FollowMsg_1.ogg", "Master")
@@ -1002,9 +1110,30 @@ local function CreateConfigFrame()
 		end
 	end)
 	
+	-- 关键词分组管理按钮
+	local groupBtn = CreateButton(frame, 120, 25, "关键词分组")
+	groupBtn:SetPoint("TOPLEFT", 20, -320)
+	groupBtn:SetScript("OnClick", function()
+		KM:ShowKeywordGroupsUI()
+	end)
+	
+	-- 历史记录按钮
+	local historyBtn = CreateButton(frame, 120, 25, "历史记录")
+	historyBtn:SetPoint("LEFT", groupBtn, "RIGHT", 10, 0)
+	historyBtn:SetScript("OnClick", function()
+		KM:ShowHistoryUI()
+	end)
+	
+	-- 快速回复按钮
+	local quickReplyBtn = CreateButton(frame, 120, 25, "快速回复")
+	quickReplyBtn:SetPoint("LEFT", historyBtn, "RIGHT", 10, 0)
+	quickReplyBtn:SetScript("OnClick", function()
+		KM:ShowQuickReplyUI()
+	end)
+	
 	-- NDui 美化开关（始终可用）
 	local nduiCheck = CreateCheckBox(frame)
-	nduiCheck:SetPoint("TOPLEFT", 20, -325)
+	nduiCheck:SetPoint("TOPLEFT", 20, -355)
 	nduiCheck:SetChecked(KeywordMonitorDB.UseNDuiStyle)
 	local nduiLabel = CreateFS(frame, 13, "使用 NDui 美化风格", false, "LEFT")
 	nduiLabel:SetPoint("LEFT", nduiCheck, "RIGHT", 5, 0)
@@ -1022,10 +1151,10 @@ local function CreateConfigFrame()
 	end)
 	
 	local outputLabel = CreateFS(frame, 14, "输出方式:", false, "LEFT")
-	outputLabel:SetPoint("TOPLEFT", 20, -355)
+	outputLabel:SetPoint("TOPLEFT", 20, -385)
 	
 	local systemRadio = CreateCheckBox(frame)
-	systemRadio:SetPoint("TOPLEFT", 40, -380)
+	systemRadio:SetPoint("TOPLEFT", 40, -410)
 	systemRadio:SetChecked(KeywordMonitorDB.OutputMode == 1)
 	local systemLabel = CreateFS(frame, 13, "系统聊天窗口", false, "LEFT")
 	systemLabel:SetPoint("LEFT", systemRadio, "RIGHT", 5, 0)
@@ -1037,7 +1166,7 @@ local function CreateConfigFrame()
 	independentLabel:SetPoint("LEFT", independentRadio, "RIGHT", 5, 0)
 	
 	local chatFrameLabel = CreateFS(frame, 13, "输出到聊天窗口", false, "LEFT")
-	chatFrameLabel:SetPoint("TOPLEFT", 60, -410)
+	chatFrameLabel:SetPoint("TOPLEFT", 60, -440)
 	
 	local chatFrameDropdown = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 	chatFrameDropdown:SetSize(150, 30)
@@ -1510,6 +1639,691 @@ function KM:GetBlacklistKeywords()
 	end
 	table.sort(list)
 	return list
+end
+
+-- 添加到历史记录
+function KM:AddToHistory(record)
+	EnsureConfig()
+	
+	-- 添加到历史记录开头
+	tinsert(KeywordMonitorDB.History, 1, record)
+	
+	-- 限制历史记录数量
+	while #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount do
+		tremove(KeywordMonitorDB.History)
+	end
+end
+
+-- 获取历史记录
+function KM:GetHistory()
+	EnsureConfig()
+	return KeywordMonitorDB.History or {}
+end
+
+-- 清空历史记录
+function KM:ClearHistory()
+	EnsureConfig()
+	KeywordMonitorDB.History = {}
+	print("|cff00FF00[ChatKeyword]|r 历史记录已清空")
+end
+
+-- 搜索历史记录
+function KM:SearchHistory(searchText)
+	EnsureConfig()
+	if not searchText or searchText == "" then
+		return KeywordMonitorDB.History
+	end
+	
+	local results = {}
+	local upperSearch = upper(searchText)
+	
+	for _, record in ipairs(KeywordMonitorDB.History) do
+		local cleanMsg = CleanText(record.msg)
+		local cleanName = upper(record.name)
+		
+		if find(cleanMsg, upperSearch, 1, true) or find(cleanName, upperSearch, 1, true) then
+			tinsert(results, record)
+		end
+	end
+	
+	return results
+end
+
+-- 添加快速回复模板
+function KM:AddQuickReply(text)
+	EnsureConfig()
+	if not text or text == "" then return end
+	
+	-- 检查是否已存在
+	for _, reply in ipairs(KeywordMonitorDB.QuickReplies) do
+		if reply == text then
+			print("|cff00FF00[ChatKeyword]|r 该回复模板已存在")
+			return
+		end
+	end
+	
+	tinsert(KeywordMonitorDB.QuickReplies, text)
+	print("|cff00FF00[ChatKeyword]|r 已添加快速回复: " .. text)
+end
+
+-- 删除快速回复模板
+function KM:RemoveQuickReply(index)
+	EnsureConfig()
+	if index and KeywordMonitorDB.QuickReplies[index] then
+		local text = KeywordMonitorDB.QuickReplies[index]
+		tremove(KeywordMonitorDB.QuickReplies, index)
+		print("|cff00FF00[ChatKeyword]|r 已删除快速回复: " .. text)
+	end
+end
+
+-- 发送快速回复
+function KM:SendQuickReply(playerName, replyText)
+	if not playerName or not replyText then return end
+	
+	-- 设置密语目标并发送消息
+	ChatFrame_SendTell(playerName)
+	
+	-- 延迟发送消息，确保密语框已打开
+	C_Timer.After(0.1, function()
+		local editBox = ChatEdit_ChooseBoxForSend()
+		if editBox then
+			editBox:SetText(replyText)
+			ChatEdit_SendText(editBox)
+		end
+	end)
+end
+
+-- 添加关键词组
+function KM:AddKeywordGroup(name, keywords, color)
+	EnsureConfig()
+	
+	local group = {
+		name = name or "新分组",
+		keywords = keywords or "",
+		enabled = true,
+		color = color or {math.random(), math.random(), math.random()},
+	}
+	
+	tinsert(KeywordMonitorDB.KeywordGroups, group)
+	print("|cff00FF00[ChatKeyword]|r 已添加关键词组: " .. group.name)
+	
+	return group
+end
+
+-- 删除关键词组
+function KM:RemoveKeywordGroup(index)
+	EnsureConfig()
+	if index and KeywordMonitorDB.KeywordGroups[index] then
+		local name = KeywordMonitorDB.KeywordGroups[index].name
+		tremove(KeywordMonitorDB.KeywordGroups, index)
+		print("|cff00FF00[ChatKeyword]|r 已删除关键词组: " .. name)
+	end
+end
+
+-- 更新关键词组
+function KM:UpdateKeywordGroup(index, name, keywords, enabled, color)
+	EnsureConfig()
+	if index and KeywordMonitorDB.KeywordGroups[index] then
+		local group = KeywordMonitorDB.KeywordGroups[index]
+		if name then group.name = name end
+		if keywords ~= nil then group.keywords = keywords end
+		if enabled ~= nil then group.enabled = enabled end
+		if color then group.color = color end
+	end
+end
+
+-- 获取所有启用的关键词组
+function KM:GetEnabledKeywordGroups()
+	EnsureConfig()
+	local enabled = {}
+	for _, group in ipairs(KeywordMonitorDB.KeywordGroups) do
+		if group.enabled then
+			tinsert(enabled, group)
+		end
+	end
+	return enabled
+end
+
+-- 显示关键词分组管理界面
+function KM:ShowKeywordGroupsUI()
+	EnsureConfig()
+	
+	if not self.groupsFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_GroupsUI", UIParent, "BackdropTemplate")
+		frame:SetSize(600, 450)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("DIALOG")
+		frame:SetFrameLevel(100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.9)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "关键词分组管理", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateButton(frame, 20, 20, "X")
+		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 使用分组模式开关
+		local useGroupCheck = CreateCheckBox(frame)
+		useGroupCheck:SetPoint("TOPLEFT", 20, -40)
+		useGroupCheck:SetChecked(KeywordMonitorDB.UseKeywordGroups)
+		local useGroupLabel = CreateFS(frame, 13, "启用分组模式", false, "LEFT")
+		useGroupLabel:SetPoint("LEFT", useGroupCheck, "RIGHT", 5, 0)
+		useGroupLabel:SetTextColor(1, 0.8, 0)
+		
+		useGroupCheck:SetScript("OnClick", function(self)
+			KeywordMonitorDB.UseKeywordGroups = self:GetChecked()
+			KM:UpdateKeywordList()
+			print("|cff00FF00[ChatKeyword]|r 分组模式: " .. (KeywordMonitorDB.UseKeywordGroups and "|cff00FF00已启用|r" or "|cffFF0000已禁用|r"))
+		end)
+		
+		-- 分组列表滚动框
+		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -70)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 50)
+		
+		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+		scrollChild:SetSize(540, 1)
+		scrollFrame:SetScrollChild(scrollChild)
+		frame.scrollChild = scrollChild
+		
+		-- 添加新分组按钮
+		local addBtn = CreateButton(frame, 100, 25, "添加分组")
+		addBtn:SetPoint("BOTTOMLEFT", 20, 15)
+		addBtn:SetScript("OnClick", function()
+			KM:AddKeywordGroup("新分组", "")
+			KM:RefreshGroupsList()
+		end)
+		
+		-- 刷新列表函数
+		function KM:RefreshGroupsList()
+			-- 清除旧的
+			if scrollChild.groups then
+				for _, g in ipairs(scrollChild.groups) do
+					g:Hide()
+					g:SetParent(nil)
+				end
+			end
+			scrollChild.groups = {}
+			
+			local yOffset = -10
+			for i, group in ipairs(KeywordMonitorDB.KeywordGroups) do
+				local groupFrame = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
+				groupFrame:SetSize(520, 80)
+				groupFrame:SetPoint("TOPLEFT", 10, yOffset)
+				
+				if KeywordMonitorDB.UseNDuiStyle then
+					groupFrame:SetBackdrop({
+						bgFile = "Interface\\Buttons\\WHITE8X8",
+						edgeFile = "Interface\\Buttons\\WHITE8X8",
+						edgeSize = 1,
+					})
+					groupFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+					groupFrame:SetBackdropBorderColor(0, 0, 0, 1)
+				else
+					groupFrame:SetBackdrop({
+						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+						tile = true,
+						tileSize = 16,
+						edgeSize = 12,
+						insets = { left = 2, right = 2, top = 2, bottom = 2 }
+					})
+					groupFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
+				end
+				
+				-- 启用复选框
+				local enableCheck = CreateCheckBox(groupFrame)
+				enableCheck:SetPoint("TOPLEFT", 5, -5)
+				enableCheck:SetChecked(group.enabled)
+				enableCheck:SetScript("OnClick", function(self)
+					KM:UpdateKeywordGroup(i, nil, nil, self:GetChecked())
+					KM:UpdateKeywordList()
+				end)
+				
+				-- 分组名称
+				local nameBox = CreateEditBox(groupFrame, 150, 25)
+				nameBox:SetPoint("LEFT", enableCheck, "RIGHT", 5, 0)
+				nameBox:SetText(group.name)
+				nameBox:SetScript("OnTextChanged", function(self)
+					KM:UpdateKeywordGroup(i, self:GetText())
+				end)
+				
+				-- 删除按钮
+				local delBtn = CreateButton(groupFrame, 50, 20, "删除")
+				delBtn:SetPoint("TOPRIGHT", -5, -5)
+				delBtn:SetScript("OnClick", function()
+					KM:RemoveKeywordGroup(i)
+					KM:RefreshGroupsList()
+				end)
+				
+				-- 关键词输入框
+				local kwLabel = CreateFS(groupFrame, 11, "关键词:", false, "LEFT")
+				kwLabel:SetPoint("TOPLEFT", 10, -35)
+				
+				local kwBox = CreateEditBox(groupFrame, 490, 25)
+				kwBox:SetPoint("TOPLEFT", 10, -50)
+				kwBox:SetText(group.keywords)
+				kwBox:SetScript("OnTextChanged", function(self)
+					KM:UpdateKeywordGroup(i, nil, self:GetText())
+					KM:UpdateKeywordList()
+				end)
+				
+				tinsert(scrollChild.groups, groupFrame)
+				yOffset = yOffset - 90
+			end
+			
+			scrollChild:SetHeight(math.max(1, -yOffset))
+		end
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshGroupsList()
+		end)
+		
+		self.groupsFrame = frame
+	end
+	
+	if self.groupsFrame:IsShown() then
+		self.groupsFrame:Hide()
+	else
+		self.groupsFrame:Show()
+	end
+end
+
+-- 显示历史记录界面
+function KM:ShowHistoryUI()
+	EnsureConfig()
+	
+	if not self.historyFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_HistoryUI", UIParent, "BackdropTemplate")
+		frame:SetSize(700, 500)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("DIALOG")
+		frame:SetFrameLevel(100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.9)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "历史记录", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateButton(frame, 20, 20, "X")
+		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 搜索框
+		local searchLabel = CreateFS(frame, 12, "搜索:", false, "LEFT")
+		searchLabel:SetPoint("TOPLEFT", 20, -40)
+		
+		local searchBox = CreateEditBox(frame, 200, 25)
+		searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 5, 0)
+		
+		local searchBtn = CreateButton(frame, 60, 25, "搜索")
+		searchBtn:SetPoint("LEFT", searchBox, "RIGHT", 5, 0)
+		
+		-- 清空按钮
+		local clearBtn = CreateButton(frame, 100, 25, "清空历史")
+		clearBtn:SetPoint("TOPRIGHT", -20, -40)
+		clearBtn:SetScript("OnClick", function()
+			KM:ClearHistory()
+			KM:RefreshHistoryList()
+		end)
+		
+		-- 历史记录列表
+		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -75)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 20)
+		
+		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+		scrollChild:SetSize(640, 1)
+		scrollFrame:SetScrollChild(scrollChild)
+		frame.scrollChild = scrollChild
+		
+		-- 刷新历史记录列表
+		function KM:RefreshHistoryList(searchText)
+			if scrollChild.records then
+				for _, r in ipairs(scrollChild.records) do
+					r:Hide()
+					r:SetParent(nil)
+				end
+			end
+			scrollChild.records = {}
+			
+			local history = searchText and KM:SearchHistory(searchText) or KM:GetHistory()
+			
+			local yOffset = -5
+			for i, record in ipairs(history) do
+				local recordFrame = CreateFrame("Button", nil, scrollChild, "BackdropTemplate")
+				recordFrame:SetSize(620, 60)
+				recordFrame:SetPoint("TOPLEFT", 5, yOffset)
+				
+				if KeywordMonitorDB.UseNDuiStyle then
+					recordFrame:SetBackdrop({
+						bgFile = "Interface\\Buttons\\WHITE8X8",
+						edgeFile = "Interface\\Buttons\\WHITE8X8",
+						edgeSize = 1,
+					})
+					recordFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+					recordFrame:SetBackdropBorderColor(0, 0, 0, 1)
+				else
+					recordFrame:SetBackdrop({
+						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+						tile = true,
+						tileSize = 16,
+						edgeSize = 12,
+						insets = { left = 2, right = 2, top = 2, bottom = 2 }
+					})
+					recordFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+				end
+				
+				recordFrame:SetScript("OnEnter", function(self)
+					self:SetBackdropColor(0.2, 0.2, 0.2, 0.8)
+				end)
+				recordFrame:SetScript("OnLeave", function(self)
+					self:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+				end)
+				
+				-- 时间和频道
+				local timeText = CreateFS(recordFrame, 11, record.timeStr .. " " .. record.channelName, false, "LEFT")
+				timeText:SetPoint("TOPLEFT", 5, -5)
+				timeText:SetTextColor(0.7, 0.7, 0.7)
+				
+				-- 玩家名
+				local nameText = CreateFS(recordFrame, 12, record.name, false, "LEFT")
+				nameText:SetPoint("TOPLEFT", 5, -20)
+				nameText:SetTextColor(record.r or 1, record.g or 1, record.b or 1)
+				
+				-- 消息内容
+				local msgText = CreateFS(recordFrame, 11, record.msg, false, "LEFT")
+				msgText:SetPoint("TOPLEFT", 5, -35)
+				msgText:SetPoint("RIGHT", -5, 0)
+				msgText:SetWordWrap(false)
+				
+				-- 点击回复
+				recordFrame:SetScript("OnClick", function()
+					KM:ShowQuickReplyForPlayer(record.author or record.name)
+				end)
+				
+				tinsert(scrollChild.records, recordFrame)
+				yOffset = yOffset - 65
+			end
+			
+			scrollChild:SetHeight(math.max(1, -yOffset))
+		end
+		
+		searchBtn:SetScript("OnClick", function()
+			KM:RefreshHistoryList(searchBox:GetText())
+		end)
+		
+		searchBox:SetScript("OnEnterPressed", function(self)
+			KM:RefreshHistoryList(self:GetText())
+		end)
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshHistoryList()
+		end)
+		
+		self.historyFrame = frame
+	end
+	
+	if self.historyFrame:IsShown() then
+		self.historyFrame:Hide()
+	else
+		self.historyFrame:Show()
+	end
+end
+
+-- 显示快速回复界面
+function KM:ShowQuickReplyUI()
+	EnsureConfig()
+	
+	if not self.quickReplyFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_QuickReplyUI", UIParent, "BackdropTemplate")
+		frame:SetSize(400, 350)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("DIALOG")
+		frame:SetFrameLevel(100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.9)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "快速回复管理", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateButton(frame, 20, 20, "X")
+		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 添加新回复
+		local addLabel = CreateFS(frame, 12, "新回复:", false, "LEFT")
+		addLabel:SetPoint("TOPLEFT", 20, -40)
+		
+		local addBox = CreateEditBox(frame, 250, 25)
+		addBox:SetPoint("LEFT", addLabel, "RIGHT", 5, 0)
+		
+		local addBtn = CreateButton(frame, 60, 25, "添加")
+		addBtn:SetPoint("LEFT", addBox, "RIGHT", 5, 0)
+		addBtn:SetScript("OnClick", function()
+			local text = addBox:GetText()
+			if text and text ~= "" then
+				KM:AddQuickReply(text)
+				addBox:SetText("")
+				KM:RefreshQuickReplyList()
+			end
+		end)
+		
+		-- 回复列表
+		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -75)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 20)
+		
+		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+		scrollChild:SetSize(340, 1)
+		scrollFrame:SetScrollChild(scrollChild)
+		frame.scrollChild = scrollChild
+		
+		-- 刷新回复列表
+		function KM:RefreshQuickReplyList()
+			if scrollChild.replies then
+				for _, r in ipairs(scrollChild.replies) do
+					r:Hide()
+					r:SetParent(nil)
+				end
+			end
+			scrollChild.replies = {}
+			
+			local yOffset = -5
+			for i, replyText in ipairs(KeywordMonitorDB.QuickReplies) do
+				local replyFrame = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
+				replyFrame:SetSize(320, 30)
+				replyFrame:SetPoint("TOPLEFT", 5, yOffset)
+				
+				if KeywordMonitorDB.UseNDuiStyle then
+					replyFrame:SetBackdrop({
+						bgFile = "Interface\\Buttons\\WHITE8X8",
+						edgeFile = "Interface\\Buttons\\WHITE8X8",
+						edgeSize = 1,
+					})
+					replyFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+					replyFrame:SetBackdropBorderColor(0, 0, 0, 1)
+				else
+					replyFrame:SetBackdrop({
+						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+						tile = true,
+						tileSize = 16,
+						edgeSize = 12,
+						insets = { left = 2, right = 2, top = 2, bottom = 2 }
+					})
+					replyFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+				end
+				
+				local text = CreateFS(replyFrame, 11, replyText, false, "LEFT")
+				text:SetPoint("LEFT", 5, 0)
+				text:SetPoint("RIGHT", -60, 0)
+				
+				local delBtn = CreateButton(replyFrame, 50, 20, "删除")
+				delBtn:SetPoint("RIGHT", -5, 0)
+				delBtn:SetScript("OnClick", function()
+					KM:RemoveQuickReply(i)
+					KM:RefreshQuickReplyList()
+				end)
+				
+				tinsert(scrollChild.replies, replyFrame)
+				yOffset = yOffset - 35
+			end
+			
+			scrollChild:SetHeight(math.max(1, -yOffset))
+		end
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshQuickReplyList()
+		end)
+		
+		self.quickReplyFrame = frame
+	end
+	
+	if self.quickReplyFrame:IsShown() then
+		self.quickReplyFrame:Hide()
+	else
+		self.quickReplyFrame:Show()
+	end
+end
+
+-- 为特定玩家显示快速回复选择
+function KM:ShowQuickReplyForPlayer(playerName)
+	EnsureConfig()
+	
+	if #KeywordMonitorDB.QuickReplies == 0 then
+		print("|cff00FF00[ChatKeyword]|r 请先在快速回复管理中添加回复模板")
+		return
+	end
+	
+	-- 创建简单的选择菜单
+	local menu = CreateFrame("Frame", "KeywordMonitor_QuickReplyMenu", UIParent, "BackdropTemplate")
+	menu:SetSize(250, 30 * #KeywordMonitorDB.QuickReplies + 10)
+	menu:SetPoint("CENTER")
+	menu:SetFrameStrata("TOOLTIP")
+	menu:SetFrameLevel(200)
+	
+	if KeywordMonitorDB.UseNDuiStyle then
+		menu:SetBackdrop({
+			bgFile = "Interface\\Buttons\\WHITE8X8",
+			edgeFile = "Interface\\Buttons\\WHITE8X8",
+			edgeSize = 1,
+		})
+		menu:SetBackdropColor(0, 0, 0, 0.95)
+		menu:SetBackdropBorderColor(0, 0, 0, 1)
+	else
+		menu:SetBackdrop({
+			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true,
+			tileSize = 16,
+			edgeSize = 12,
+			insets = { left = 2, right = 2, top = 2, bottom = 2 }
+		})
+	end
+	
+	local yOffset = -5
+	for i, replyText in ipairs(KeywordMonitorDB.QuickReplies) do
+		local btn = CreateButton(menu, 230, 25, replyText)
+		btn:SetPoint("TOP", 0, yOffset)
+		btn:SetScript("OnClick", function()
+			KM:SendQuickReply(playerName, replyText)
+			menu:Hide()
+			print("|cff00FF00[ChatKeyword]|r 已向 " .. playerName .. " 发送: " .. replyText)
+		end)
+		yOffset = yOffset - 30
+	end
+	
+	-- 点击外部关闭
+	menu:SetScript("OnHide", function(self)
+		C_Timer.After(0.1, function()
+			self:SetParent(nil)
+		end)
+	end)
+	
+	menu:Show()
+	
+	-- 3秒后自动关闭
+	C_Timer.After(3, function()
+		if menu:IsShown() then
+			menu:Hide()
+		end
+	end)
 end
 
 -- 初始化
