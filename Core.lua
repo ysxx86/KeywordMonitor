@@ -663,7 +663,7 @@ local function CreateKeywordFrame()
 	frame:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", 0, 30)
 	frame:SetFrameStrata("MEDIUM")
 	frame:SetFading(false)
-	frame:SetMaxLines(20)  -- 从100减少到20，大幅降低内存占用
+	frame:SetMaxLines(100)
 	frame:SetHyperlinksEnabled(true)
 	frame:EnableMouse(true)
 	frame:EnableMouseWheel(true)
@@ -841,7 +841,7 @@ end
 function KM:CheckVersionUpdate()
 	EnsureConfig()
 	
-	local currentVersion = "1.7.2"
+	local currentVersion = "1.7.1"
 	local lastVersion = KeywordMonitorDB.LastVersion or ""
 	
 	if lastVersion ~= currentVersion then
@@ -881,18 +881,17 @@ function KM:ShowUpdateLog(currentVersion, lastVersion)
 		print("|cff00FF00[ChatKeyword]|r 插件已更新！")
 		print("|cff00FF00当前版本：|r v" .. currentVersion .. " |cff808080(上次: v" .. lastVersion .. ")|r")
 		print("|cff00FF00===========================================|r")
-		print("|cffFFFF00v1.7.2 更新内容：|r")
-		print("  • 移除 GetColoredName/GetPlayerLink 调用")
-		print("  • 优化 UpdateStatistics，避免频繁遍历")
-		print("  • 禁用历史记录功能以节省内存")
-		print("  • 减少独立窗口最大行数到20行")
-		print("  • 垃圾回收间隔从30秒改为10秒")
-		print("  • 禁用性能监控界面自动刷新")
+		print("|cffFFFF00v1.7.1 更新内容：|r")
+		print("  • 全面优化内存管理，大幅降低内存占用")
+		print("  • 优化消息处理流程，减少字符串操作")
+		print("  • 简化高亮关键词算法")
+		print("  • 添加自动垃圾回收机制")
+		print("  • 优化重复消息缓存策略")
 		print("|cff00FF00===========================================|r")
 	end
 end
 
--- 显示关键词消息（极致优化版 - 最小化内存分配）
+-- 显示关键词消息（优化版 - 减少内存占用）
 local function ShowKeywordMessage(self, event, msg, author, ...)
 	EnsureConfig()
 	if not KeywordMonitorDB.Enabled then return false end
@@ -925,55 +924,71 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 		return false
 	end
 	
-	-- 更新统计数据（先更新，避免后续操作失败导致统计不准）
 	local time = GetServerTime()
-	KM:UpdateStatistics(keyword, time)
-	KM:UpdatePerformance()
+	local timeStr = date("%H:%M", time)
 	
-	-- 简化输出 - 只在需要时才构建完整消息
-	if KeywordMonitorDB.OutputMode == 1 or (KeywordMonitorDB.OutputMode == 2 and keywordFrame and keywordFrame:IsShown()) then
-		local timeStr = date("%H:%M", time)
-		
-		-- 简化频道名称
-		local channelString = select(2, ...)
-		local channelName = "[频道]"
-		if channelString and channelString ~= "" then
-			local channelText = channelString:match("^%d+%. (.+)$")
-			if channelText then
-				channelName = "[" .. channelText .. "]"
-			end
+	-- 简化频道名称获取
+	local channelString = select(2, ...)
+	local channelName = "[频道]"
+	if channelString and channelString ~= "" then
+		local channelText = channelString:match("^%d+%. (.+)$")
+		if channelText then
+			channelName = "[" .. channelText .. "]"
 		end
-		
-		-- 简化消息处理 - 直接使用原始消息，不做复杂处理
-		local outMsg = HighlightKeyword(msg, keyword)
-		
-		-- 简化输出格式 - 不使用 GetColoredName 和 GetPlayerLink
-		local output = string.format("|cff808080%s|r |cffFFD700%s|r %s: %s", timeStr, channelName, name, outMsg)
-		
-		-- 输出消息
-		if KeywordMonitorDB.OutputMode == 1 then
-			local chatFrame = _G["ChatFrame"..KeywordMonitorDB.OutputChatFrame]
-			if chatFrame then
-				chatFrame:AddMessage(output, 1, 1, 1)
-				if KeywordMonitorDB.FlashOnMatch and GeneralDockManager.selected ~= chatFrame then
-					FCF_StartAlertFlash(chatFrame)
-				end
-			end
-		elseif KeywordMonitorDB.OutputMode == 2 then
-			if keywordFrame and keywordFrame:IsShown() then
-				keywordFrame:AddMessage(output, 1, 1, 1)
-			end
-		end
-		
-		-- 保存到历史记录（可选 - 如果不需要历史记录可以注释掉以节省内存）
-		-- KM:AddToHistory({
-		-- 	time = time,
-		-- 	timeStr = timeStr,
-		-- 	name = name,
-		-- 	msg = msg,
-		-- 	channelName = channelName,
-		-- })
 	end
+	
+	-- 简化颜色获取
+	local coloredName = GetColoredName(event, msg, author, ...)
+	local playerLink = GetPlayerLink(author, "["..coloredName.."]")
+	
+	local r, g, b = 1, 1, 1
+	local colorCode = coloredName:match("|cff(%x%x%x%x%x%x)")
+	if colorCode then
+		r = tonumber(colorCode:sub(1, 2), 16) / 255
+		g = tonumber(colorCode:sub(3, 4), 16) / 255
+		b = tonumber(colorCode:sub(5, 6), 16) / 255
+	end
+	
+	-- 简化消息处理 - 不进行复杂的表达式替换
+	local outMsg = HighlightKeyword(msg, keyword)
+	
+	-- 构建输出消息
+	local output
+	if KeywordMonitorDB.OutputMode == 1 then
+		output = string.format("|cff808080%s|r |cffFFD700%s|r [|cff00FF00关注|r] %s: %s", timeStr, channelName, playerLink, outMsg)
+	else
+		output = string.format("|cff808080%s|r |cffFFD700%s|r %s: %s", timeStr, channelName, playerLink, outMsg)
+	end
+	
+	-- 输出消息
+	if KeywordMonitorDB.OutputMode == 1 then
+		local chatFrame = _G["ChatFrame"..KeywordMonitorDB.OutputChatFrame]
+		if chatFrame then
+			chatFrame:AddMessage(output, r, g, b)
+			if KeywordMonitorDB.FlashOnMatch and GeneralDockManager.selected ~= chatFrame then
+				FCF_StartAlertFlash(chatFrame)
+			end
+		end
+	elseif KeywordMonitorDB.OutputMode == 2 then
+		if keywordFrame and keywordFrame:IsShown() then
+			keywordFrame:AddMessage(output, r, g, b)
+		end
+	end
+	
+	-- 保存到历史记录（只保存最基本的信息）
+	KM:AddToHistory({
+		time = time,
+		timeStr = timeStr,
+		name = name,
+		msg = msg,
+		channelName = channelName,
+	})
+	
+	-- 更新统计数据
+	KM:UpdateStatistics(keyword, time)
+	
+	-- 更新性能统计
+	KM:UpdatePerformance()
 	
 	-- 播放提示音
 	if KeywordMonitorDB.AudioEnabled then
@@ -2750,8 +2765,7 @@ function KM:ShowQuickReplyConfirmation(playerName, replyText)
 	quickReplyConfirmFrame:Show()
 end
 
--- 更新统计数据（极致优化版 - 避免频繁遍历）
-local keywordCountsSize = 0  -- 缓存关键词数量，避免每次都遍历
+-- 更新统计数据
 function KM:UpdateStatistics(keyword, time)
 	EnsureConfig()
 	
@@ -2761,22 +2775,59 @@ function KM:UpdateStatistics(keyword, time)
 	-- 增加总匹配次数
 	KeywordMonitorDB.Statistics.TotalMatches = KeywordMonitorDB.Statistics.TotalMatches + 1
 	
-	-- 简化关键词统计 - 不再限制数量，让自然淘汰
+	-- 记录关键词匹配次数（限制最多50个关键词）
+	local matchedKeywords = {}
 	if type(keyword) == "string" then
 		if not KeywordMonitorDB.Statistics.KeywordCounts[keyword] then
+			-- 检查是否已经有50个关键词
+			local count = 0
+			for _ in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+				count = count + 1
+			end
+			
+			if count >= 50 then
+				-- 找出最少的关键词并删除
+				local minKw, minCount = nil, math.huge
+				for k, c in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+					if c < minCount then
+						minKw, minCount = k, c
+					end
+				end
+				if minKw then
+					KeywordMonitorDB.Statistics.KeywordCounts[minKw] = nil
+				end
+			end
+			
 			KeywordMonitorDB.Statistics.KeywordCounts[keyword] = 0
-			keywordCountsSize = keywordCountsSize + 1
 		end
 		KeywordMonitorDB.Statistics.KeywordCounts[keyword] = KeywordMonitorDB.Statistics.KeywordCounts[keyword] + 1
+		tinsert(matchedKeywords, keyword)
 	elseif type(keyword) == "table" then
 		-- 组合关键词，记录每个子关键词
 		for _, subKey in ipairs(keyword) do
 			if sub(subKey, 1, 1) ~= "&" then
 				if not KeywordMonitorDB.Statistics.KeywordCounts[subKey] then
+					local count = 0
+					for _ in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+						count = count + 1
+					end
+					
+					if count >= 50 then
+						local minKw, minCount = nil, math.huge
+						for k, c in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+							if c < minCount then
+								minKw, minCount = k, c
+							end
+						end
+						if minKw then
+							KeywordMonitorDB.Statistics.KeywordCounts[minKw] = nil
+						end
+					end
+					
 					KeywordMonitorDB.Statistics.KeywordCounts[subKey] = 0
-					keywordCountsSize = keywordCountsSize + 1
 				end
 				KeywordMonitorDB.Statistics.KeywordCounts[subKey] = KeywordMonitorDB.Statistics.KeywordCounts[subKey] + 1
+				tinsert(matchedKeywords, subKey)
 			end
 		end
 	end
@@ -2788,7 +2839,9 @@ function KM:UpdateStatistics(keyword, time)
 	end
 	KeywordMonitorDB.Statistics.HourCounts[hour] = KeywordMonitorDB.Statistics.HourCounts[hour] + 1
 	
-	-- 不再调用趋势数据和关联分析，已经注释掉了
+	-- 注释掉趋势数据和关联分析，减少内存占用
+	-- KM:UpdateTrendData(matchedKeywords, time)
+	-- KM:UpdateKeywordCorrelation(matchedKeywords)
 end
 
 -- 更新趋势数据（优化版 - 减少频繁操作）
@@ -4858,14 +4911,24 @@ function KM:ShowPerformanceUI()
 			end
 		end
 		
-		-- 自动刷新（禁用自动刷新，改为手动刷新）
+		-- 自动刷新
 		frame:SetScript("OnShow", function()
 			KM:RefreshPerformance()
-			-- 不再自动刷新，避免性能监控界面本身导致内存增长
+			-- 每5秒刷新一次（从2秒改为5秒，减少刷新频率）
+			if not frame.ticker then
+				frame.ticker = C_Timer.NewTicker(5, function()
+					if frame:IsShown() then
+						KM:RefreshPerformance()
+					end
+				end)
+			end
 		end)
 		
 		frame:SetScript("OnHide", function()
-			-- 清理
+			if frame.ticker then
+				frame.ticker:Cancel()
+				frame.ticker = nil
+			end
 		end)
 		
 		self.performanceFrame = frame
@@ -4922,8 +4985,8 @@ function KM:Init()
 			CleanRepeatMessageCache()
 		end)
 		
-		-- 每10秒强制垃圾回收（更激进的内存管理）
-		C_Timer.NewTicker(10, function()
+		-- 每30秒强制垃圾回收（激进的内存管理）
+		C_Timer.NewTicker(30, function()
 			collectgarbage("collect")
 		end)
 	end)
