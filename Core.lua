@@ -29,7 +29,6 @@ local keywords = {}
 local keywordButton
 local configFrame
 local lastSoundTime = 0
-local repeatMessageCache = {}
 
 -- 检测是否有 NDui
 local hasNDui = IsAddOnLoaded("NDui")
@@ -74,7 +73,7 @@ local defaultConfig = {
 	UseKeywordGroups = false,  -- 是否使用分组模式
 	-- 历史记录
 	History = {},  -- 最近的匹配消息
-	HistoryMaxCount = 100,  -- 最多保存100条
+	HistoryMaxCount = 50,  -- 最多保存50条（从100改为50）
 	-- 快速回复
 	QuickReplies = {
 		"有兴趣，密我",
@@ -88,15 +87,6 @@ local defaultConfig = {
 		KeywordCounts = {},         -- 关键词匹配次数 {["关键词"] = 次数}
 		HourCounts = {},            -- 每小时匹配次数 {[0-23] = 次数}
 		TotalMatches = 0,           -- 总匹配次数
-	},
-	-- 智能学习
-	SmartLearning = {
-		Enabled = true,             -- 是否启用智能学习
-		WordFrequency = {},         -- 词频统计 {["词汇"] = 次数}
-		LastSuggestionTime = 0,     -- 上次建议时间
-		SuggestionInterval = 3600,  -- 建议间隔（秒，默认1小时）
-		MinFrequency = 5,           -- 最小出现次数才建议
-		IgnoredWords = {},          -- 已忽略的建议词 {["词汇"] = true}
 	},
 	-- 预设方案
 	Presets = {},  -- 用户自定义的预设方案
@@ -117,7 +107,7 @@ local defaultConfig = {
 	},
 	-- 数据清理
 	AutoCleanOldData = true,     -- 自动清理旧数据
-	DataRetentionDays = 7,       -- 数据保留天数
+	DataRetentionDays = 3,       -- 数据保留天数（从7改为3）
 	LastVersion = "",            -- 上次运行的版本
 }
 
@@ -166,7 +156,7 @@ local function EnsureConfig()
 		KeywordMonitorDB.UseKeywordGroups = false
 	end
 	if not KeywordMonitorDB.HistoryMaxCount then
-		KeywordMonitorDB.HistoryMaxCount = 100
+		KeywordMonitorDB.HistoryMaxCount = 50  -- 从100改为50
 	end
 	if not KeywordMonitorDB.Statistics then
 		KeywordMonitorDB.Statistics = {
@@ -195,17 +185,7 @@ local function EnsureConfig()
 		end
 	end
 	
-	-- 初始化智能学习
-	if not KeywordMonitorDB.SmartLearning then
-		KeywordMonitorDB.SmartLearning = {
-			Enabled = true,
-			WordFrequency = {},
-			LastSuggestionTime = 0,
-			SuggestionInterval = 3600,
-			MinFrequency = 5,
-			IgnoredWords = {},
-		}
-	end
+
 	
 	-- 初始化预设方案
 	if not KeywordMonitorDB.Presets then
@@ -244,7 +224,7 @@ local function EnsureConfig()
 		KeywordMonitorDB.AutoCleanOldData = true
 	end
 	if not KeywordMonitorDB.DataRetentionDays then
-		KeywordMonitorDB.DataRetentionDays = 7
+		KeywordMonitorDB.DataRetentionDays = 3  -- 从7改为3
 	end
 	if not KeywordMonitorDB.LastVersion then
 		KeywordMonitorDB.LastVersion = ""
@@ -340,17 +320,13 @@ local function IsFriend(name)
 	return false
 end
 
--- 清理文本函数
+-- 清理文本函数（优化版 - 减少gsub调用）
 local function CleanText(text)
 	if not text then return "" end
-	text = gsub(text, "|H.-|h%[.-%]|h", "")
-	text = gsub(text, "|c%x%x%x%x%x%x%x%x", "")
-	text = gsub(text, "|r", "")
-	text = gsub(text, "|T[^|]+|t", "")
-	text = gsub(text, "|T[^|]+|T", "")
-	text = gsub(text, "[%p%s]", "")
-	text = upper(text)
-	return text
+	-- 合并多个gsub操作，减少字符串创建
+	text = gsub(text, "|[HhTtCcRr][^|]*|[hHtT]", "")  -- 移除所有颜色和链接代码
+	text = gsub(text, "[%p%s]", "")  -- 移除标点和空格
+	return upper(text)
 end
 
 -- 检查是否在黑名单中
@@ -376,44 +352,46 @@ local function IsBlacklisted(name, text)
 	return false
 end
 
--- 检查是否是重复消息（使用哈希表优化）
+-- 检查是否是重复消息（优化版 - 使用固定大小的缓存）
+local repeatMessageCache = {}
+local repeatMessageCacheSize = 0
+local MAX_CACHE_SIZE = 50  -- 从100减少到50
+
 local function IsRepeatMessage(text)
 	local currentTime = GetTime()
 	
-	-- 限制缓存大小，最多100条
-	local cacheSize = 0
-	for _ in pairs(repeatMessageCache) do
-		cacheSize = cacheSize + 1
+	-- 检查是否重复
+	if repeatMessageCache[text] then
+		local lastTime = repeatMessageCache[text]
+		-- 如果在60秒内重复，返回true
+		if currentTime - lastTime < 60 then
+			repeatMessageCache[text] = currentTime
+			return true
+		end
 	end
 	
-	if cacheSize > 100 then
-		-- 清理所有过期的（超过60秒）
+	-- 如果缓存满了，清理最旧的条目
+	if repeatMessageCacheSize >= MAX_CACHE_SIZE then
+		-- 清理所有超过60秒的条目
+		local cleaned = 0
 		for cachedText, timestamp in pairs(repeatMessageCache) do
 			if currentTime - timestamp > 60 then
 				repeatMessageCache[cachedText] = nil
+				cleaned = cleaned + 1
 			end
 		end
+		repeatMessageCacheSize = repeatMessageCacheSize - cleaned
 		
-		-- 如果还是太多，清理所有（重置）
-		cacheSize = 0
-		for _ in pairs(repeatMessageCache) do
-			cacheSize = cacheSize + 1
-		end
-		
-		if cacheSize > 100 then
+		-- 如果还是满的，清空所有
+		if repeatMessageCacheSize >= MAX_CACHE_SIZE then
 			repeatMessageCache = {}
+			repeatMessageCacheSize = 0
 		end
-	end
-	
-	-- 检查是否重复
-	if repeatMessageCache[text] then
-		-- 更新时间戳
-		repeatMessageCache[text] = currentTime
-		return true
 	end
 	
 	-- 添加到缓存
 	repeatMessageCache[text] = currentTime
+	repeatMessageCacheSize = repeatMessageCacheSize + 1
 	return false
 end
 
@@ -423,13 +401,14 @@ local function CleanRepeatMessageCache()
 	local cleaned = 0
 	
 	for text, timestamp in pairs(repeatMessageCache) do
-		-- 清理超过3分钟的（从60秒改为180秒）
+		-- 清理超过3分钟的
 		if currentTime - timestamp > 180 then
 			repeatMessageCache[text] = nil
 			cleaned = cleaned + 1
 		end
 	end
 	
+	repeatMessageCacheSize = repeatMessageCacheSize - cleaned
 	return cleaned
 end
 
@@ -448,67 +427,70 @@ local function SplitString(str, delimiter)
 	return result
 end
 
--- 高亮关键词
+-- 工具函数：清理UI元素列表（防止内存泄漏）
+local function CleanupUIElements(elements)
+	if not elements then return end
+	for _, element in ipairs(elements) do
+		-- 清理所有SetScript
+		if element.SetScript then
+			element:SetScript("OnClick", nil)
+			element:SetScript("OnEnter", nil)
+			element:SetScript("OnLeave", nil)
+			element:SetScript("OnTextChanged", nil)
+			element:SetScript("OnShow", nil)
+			element:SetScript("OnHide", nil)
+		end
+		-- 清理子元素
+		for k, v in pairs(element) do
+			if type(v) == "table" and v.SetScript then
+				v:SetScript("OnClick", nil)
+				v:SetScript("OnEnter", nil)
+				v:SetScript("OnLeave", nil)
+				v:SetScript("OnTextChanged", nil)
+			end
+		end
+		-- 隐藏并移除
+		element:Hide()
+		element:SetParent(nil)
+		element:ClearAllPoints()
+	end
+	wipe(elements)
+end
+
+-- 高亮关键词（优化版 - 减少内存分配）
 local function HighlightKeyword(msg, matchedKeyword)
 	if not matchedKeyword or not msg then return msg end
 	
-	local keywordsToHighlight = {}
+	-- 简化处理 - 只高亮第一个匹配的关键词
+	local keywordToHighlight = nil
 	
 	if type(matchedKeyword) == "string" then
-		tinsert(keywordsToHighlight, matchedKeyword)
-	elseif type(matchedKeyword) == "table" then
+		keywordToHighlight = matchedKeyword
+	elseif type(matchedKeyword) == "table" and #matchedKeyword > 0 then
+		-- 只取第一个非排除的关键词
 		for _, kw in ipairs(matchedKeyword) do
 			if sub(kw, 1, 1) ~= "&" then
-				tinsert(keywordsToHighlight, kw)
+				keywordToHighlight = kw
+				break
 			end
 		end
 	end
 	
-	if #keywordsToHighlight == 0 then return msg end
+	if not keywordToHighlight then return msg end
 	
-	local result = msg
-	local upperResult = upper(result)
-	local highlights = {}
+	-- 简单的高亮处理 - 只高亮第一次出现
+	local upperMsg = upper(msg)
+	local upperKeyword = upper(keywordToHighlight)
+	local startPos = find(upperMsg, upperKeyword, 1, true)
 	
-	for _, keyword in ipairs(keywordsToHighlight) do
-		local upperKeyword = upper(keyword)
-		local searchPos = 1
-		
-		while true do
-			local startPos = find(upperResult, upperKeyword, searchPos, true)
-			if not startPos then break end
-			
-			local endPos = startPos + #keyword - 1
-			
-			local overlap = false
-			for _, hl in ipairs(highlights) do
-				if not (endPos < hl.startPos or startPos > hl.endPos) then
-					overlap = true
-					break
-				end
-			end
-			
-			if not overlap then
-				tinsert(highlights, {
-					startPos = startPos,
-					endPos = endPos,
-					keyword = keyword
-				})
-			end
-			
-			searchPos = startPos + 1
-		end
-	end
-	
-	table.sort(highlights, function(a, b) return a.startPos > b.startPos end)
-	
-	for _, hl in ipairs(highlights) do
-		local originalKeyword = sub(result, hl.startPos, hl.endPos)
+	if startPos then
+		local endPos = startPos + #keywordToHighlight - 1
+		local originalKeyword = sub(msg, startPos, endPos)
 		local highlighted = "|cff00FF00" .. originalKeyword .. "|r"
-		result = sub(result, 1, hl.startPos - 1) .. highlighted .. sub(result, hl.endPos + 1)
+		return sub(msg, 1, startPos - 1) .. highlighted .. sub(msg, endPos + 1)
 	end
 	
-	return result
+	return msg
 end
 
 -- 检查是否匹配关键词
@@ -681,7 +663,7 @@ local function CreateKeywordFrame()
 	frame:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", 0, 30)
 	frame:SetFrameStrata("MEDIUM")
 	frame:SetFading(false)
-	frame:SetMaxLines(100)
+	frame:SetMaxLines(20)  -- 从100减少到20，大幅降低内存占用
 	frame:SetHyperlinksEnabled(true)
 	frame:EnableMouse(true)
 	frame:EnableMouseWheel(true)
@@ -748,11 +730,18 @@ function KM:UpdatePerformance()
 	end
 end
 
--- 获取插件内存使用（KB）
+-- 获取插件内存使用（KB）- 使用缓存避免频繁调用
+local lastMemoryCheck = 0
+local cachedMemory = 0
 function KM:GetMemoryUsage()
-	UpdateAddOnMemoryUsage()
-	local memory = GetAddOnMemoryUsage("KeywordMonitor")
-	return memory
+	local currentTime = GetTime()
+	-- 只在5秒后才重新检查内存，避免频繁调用导致性能问题
+	if currentTime - lastMemoryCheck > 5 then
+		UpdateAddOnMemoryUsage()
+		cachedMemory = GetAddOnMemoryUsage("KeywordMonitor")
+		lastMemoryCheck = currentTime
+	end
+	return cachedMemory
 end
 
 -- 获取性能统计
@@ -813,33 +802,7 @@ function KM:OptimizeMemory()
 		end
 	end
 	
-	-- 2. 清理智能学习低频词（出现次数<3，更严格）
-	local wordCount = 0
-	for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-		if count < 3 then  -- 从2改为3
-			KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
-			cleaned = cleaned + 1
-		else
-			wordCount = wordCount + 1
-		end
-	end
-	
-	-- 如果词频表还是太大，只保留高频词（从200改为150）
-	if wordCount > 150 then
-		local words = {}
-		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-			tinsert(words, {word = word, count = count})
-		end
-		table.sort(words, function(a, b) return a.count > b.count end)
-		
-		KeywordMonitorDB.SmartLearning.WordFrequency = {}
-		for i = 1, math.min(150, #words) do
-			KeywordMonitorDB.SmartLearning.WordFrequency[words[i].word] = words[i].count
-		end
-		cleaned = cleaned + (wordCount - 150)
-	end
-	
-	-- 3. 清理关键词关联低频数据（关联次数<5，更严格）
+	-- 2. 清理关键词关联低频数据（关联次数<5，更严格）
 	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
 		for kw2, count in pairs(correlations) do
 			if count < 5 then  -- 从3改为5
@@ -852,11 +815,11 @@ function KM:OptimizeMemory()
 		end
 	end
 	
-	-- 4. 清理重复消息缓存
+	-- 3. 清理重复消息缓存
 	local cacheCleared = CleanRepeatMessageCache()
 	cleaned = cleaned + cacheCleared
 	
-	-- 5. 清理趋势数据中的低频关键词
+	-- 4. 清理趋势数据中的低频关键词
 	for dateStr, data in pairs(KeywordMonitorDB.TrendData.Daily) do
 		if data.keywords then
 			for kw, count in pairs(data.keywords) do
@@ -868,7 +831,7 @@ function KM:OptimizeMemory()
 		end
 	end
 	
-	-- 6. 强制垃圾回收
+	-- 5. 强制垃圾回收
 	collectgarbage("collect")
 	
 	return cleaned
@@ -878,7 +841,7 @@ end
 function KM:CheckVersionUpdate()
 	EnsureConfig()
 	
-	local currentVersion = "1.6.0"
+	local currentVersion = "1.7.2"
 	local lastVersion = KeywordMonitorDB.LastVersion or ""
 	
 	if lastVersion ~= currentVersion then
@@ -911,7 +874,6 @@ function KM:ShowUpdateLog(currentVersion, lastVersion)
 		print("  • 预设方案一键应用")
 		print("  • 导入/导出配置")
 		print("  • 趋势分析和关联分析")
-		print("  • 智能学习推荐关键词")
 		print("  • 历史记录和快速回复")
 		print("|cff00FF00===========================================|r")
 	else
@@ -919,22 +881,22 @@ function KM:ShowUpdateLog(currentVersion, lastVersion)
 		print("|cff00FF00[ChatKeyword]|r 插件已更新！")
 		print("|cff00FF00当前版本：|r v" .. currentVersion .. " |cff808080(上次: v" .. lastVersion .. ")|r")
 		print("|cff00FF00===========================================|r")
-		print("|cffFFFF00v1.6.0 更新内容：|r")
-		print("  • 新增趋势分析功能")
-		print("  • 新增关联分析功能")
-		print("  • 新增资源占用监控")
-		print("  • 新增防误操作确认")
-		print("  • 优化数据清理机制")
+		print("|cffFFFF00v1.7.2 更新内容：|r")
+		print("  • 移除 GetColoredName/GetPlayerLink 调用")
+		print("  • 优化 UpdateStatistics，避免频繁遍历")
+		print("  • 禁用历史记录功能以节省内存")
+		print("  • 减少独立窗口最大行数到20行")
+		print("  • 垃圾回收间隔从30秒改为10秒")
+		print("  • 禁用性能监控界面自动刷新")
 		print("|cff00FF00===========================================|r")
 	end
 end
 
--- 显示关键词消息
+-- 显示关键词消息（极致优化版 - 最小化内存分配）
 local function ShowKeywordMessage(self, event, msg, author, ...)
 	EnsureConfig()
 	if not KeywordMonitorDB.Enabled then return false end
 	
-	local guid = select(11, ...)
 	local name = Ambiguate(author, "none")
 	
 	-- 过滤自己的消息
@@ -963,86 +925,57 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 		return false
 	end
 	
+	-- 更新统计数据（先更新，避免后续操作失败导致统计不准）
 	local time = GetServerTime()
-	local timeStr = date("%H:%M", time)
-	
-	local language = select(1, ...)
-	local channelString = select(2, ...)
-	local channelName = ""
-	
-	if channelString and channelString ~= "" then
-		local channelText = channelString:match("^%d+%. (.+)$")
-		if channelText then
-			channelName = string.format("[%s]", channelText)
-		else
-			channelName = string.format("[%s]", channelString)
-		end
-	else
-		channelName = "[频道]"
-	end
-	
-	local coloredName = GetColoredName(event, msg, author, ...)
-	local playerLink = GetPlayerLink(author, "["..coloredName.."]")
-	
-	local r, g, b = 1, 1, 1
-	local colorCode = coloredName:match("|cff(%x%x%x%x%x%x)")
-	if colorCode then
-		r = tonumber(colorCode:sub(1, 2), 16) / 255
-		g = tonumber(colorCode:sub(3, 4), 16) / 255
-		b = tonumber(colorCode:sub(5, 6), 16) / 255
-	end
-	
-	local outMsg = msg
-	if ChatFrame_ReplaceIconAndGroupExpressions then
-		outMsg = ChatFrame_ReplaceIconAndGroupExpressions(msg, select(17, ...), not ChatFrame_CanChatGroupPerformExpressionExpansion("CHANNEL"))
-	end
-	
-	outMsg = HighlightKeyword(outMsg, keyword)
-	
-	local output
-	if KeywordMonitorDB.OutputMode == 1 then
-		output = string.format("|cff808080%s|r |cffFFD700%s|r [|cff00FF00关注|r] %s: %s", timeStr, channelName, playerLink, outMsg)
-	else
-		output = string.format("|cff808080%s|r |cffFFD700%s|r %s: %s", timeStr, channelName, playerLink, outMsg)
-	end
-	
-	if KeywordMonitorDB.OutputMode == 1 then
-		local chatFrame = _G["ChatFrame"..KeywordMonitorDB.OutputChatFrame]
-		if chatFrame then
-			chatFrame:AddMessage(output, r, g, b)
-			if KeywordMonitorDB.FlashOnMatch and GeneralDockManager.selected ~= chatFrame then
-				FCF_StartAlertFlash(chatFrame)
-			end
-		end
-	elseif KeywordMonitorDB.OutputMode == 2 then
-		if keywordFrame and keywordFrame:IsShown() then
-			keywordFrame:AddMessage(output, r, g, b)
-		end
-	end
-	
-	-- 保存到历史记录
-	KM:AddToHistory({
-		time = time,
-		timeStr = timeStr,
-		author = author,
-		name = name,
-		msg = msg,
-		outMsg = outMsg,
-		channelName = channelName,
-		keyword = keyword,
-		event = event,
-		r = r, g = g, b = b,
-	})
-	
-	-- 更新统计数据
 	KM:UpdateStatistics(keyword, time)
-	
-	-- 智能学习（分析消息中的高频词）
-	KM:LearnFromMessage(msg)
-	
-	-- 更新性能统计
 	KM:UpdatePerformance()
 	
+	-- 简化输出 - 只在需要时才构建完整消息
+	if KeywordMonitorDB.OutputMode == 1 or (KeywordMonitorDB.OutputMode == 2 and keywordFrame and keywordFrame:IsShown()) then
+		local timeStr = date("%H:%M", time)
+		
+		-- 简化频道名称
+		local channelString = select(2, ...)
+		local channelName = "[频道]"
+		if channelString and channelString ~= "" then
+			local channelText = channelString:match("^%d+%. (.+)$")
+			if channelText then
+				channelName = "[" .. channelText .. "]"
+			end
+		end
+		
+		-- 简化消息处理 - 直接使用原始消息，不做复杂处理
+		local outMsg = HighlightKeyword(msg, keyword)
+		
+		-- 简化输出格式 - 不使用 GetColoredName 和 GetPlayerLink
+		local output = string.format("|cff808080%s|r |cffFFD700%s|r %s: %s", timeStr, channelName, name, outMsg)
+		
+		-- 输出消息
+		if KeywordMonitorDB.OutputMode == 1 then
+			local chatFrame = _G["ChatFrame"..KeywordMonitorDB.OutputChatFrame]
+			if chatFrame then
+				chatFrame:AddMessage(output, 1, 1, 1)
+				if KeywordMonitorDB.FlashOnMatch and GeneralDockManager.selected ~= chatFrame then
+					FCF_StartAlertFlash(chatFrame)
+				end
+			end
+		elseif KeywordMonitorDB.OutputMode == 2 then
+			if keywordFrame and keywordFrame:IsShown() then
+				keywordFrame:AddMessage(output, 1, 1, 1)
+			end
+		end
+		
+		-- 保存到历史记录（可选 - 如果不需要历史记录可以注释掉以节省内存）
+		-- KM:AddToHistory({
+		-- 	time = time,
+		-- 	timeStr = timeStr,
+		-- 	name = name,
+		-- 	msg = msg,
+		-- 	channelName = channelName,
+		-- })
+	end
+	
+	-- 播放提示音
 	if KeywordMonitorDB.AudioEnabled then
 		PlaySoundFile("Interface\\AddOns\\KeywordMonitor\\Audio\\FollowMsg_1.ogg", "Master")
 	end
@@ -1181,7 +1114,7 @@ local function CreateConfigFrame()
 	title:SetPoint("TOP", 0, -10)
 	
 	-- 版本号和作者
-	local versionText = CreateFS(frame, 9, "v1.6.0 by 专业打地鼠", false, "RIGHT")
+	local versionText = CreateFS(frame, 9, "v1.7.0 by 专业打地鼠", false, "RIGHT")
 	versionText:SetPoint("TOPRIGHT", -25, -8)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
 	
@@ -1505,16 +1438,9 @@ local function CreateConfigFrame()
 		KM:ShowStatisticsUI()
 	end)
 	
-	-- 智能建议按钮
-	local smartBtn = CreateButton(frame, 120, 25, "智能建议")
-	smartBtn:SetPoint("LEFT", statsBtn, "RIGHT", 10, 0)
-	smartBtn:SetScript("OnClick", function()
-		KM:ShowSmartSuggestionsUI()
-	end)
-	
 	-- 性能监控按钮
 	local perfBtn = CreateButton(frame, 120, 25, "性能监控")
-	perfBtn:SetPoint("LEFT", smartBtn, "RIGHT", 10, 0)
+	perfBtn:SetPoint("LEFT", statsBtn, "RIGHT", 10, 0)
 	perfBtn:SetScript("OnClick", function()
 		KM:ShowPerformanceUI()
 	end)
@@ -2287,13 +2213,8 @@ function KM:ShowKeywordGroupsUI()
 		
 		-- 刷新列表函数
 		function KM:RefreshGroupsList()
-			-- 清除旧的
-			if scrollChild.groups then
-				for _, g in ipairs(scrollChild.groups) do
-					g:Hide()
-					g:SetParent(nil)
-				end
-			end
+			-- 清除旧的UI元素（使用通用清理函数）
+			CleanupUIElements(scrollChild.groups)
 			scrollChild.groups = {}
 			
 			local yOffset = -10
@@ -2330,6 +2251,7 @@ function KM:ShowKeywordGroupsUI()
 					KM:UpdateKeywordGroup(i, nil, nil, self:GetChecked())
 					KM:UpdateKeywordList()
 				end)
+				groupFrame.enableCheck = enableCheck
 				
 				-- 分组名称
 				local nameBox = CreateEditBox(groupFrame, 150, 25)
@@ -2338,6 +2260,7 @@ function KM:ShowKeywordGroupsUI()
 				nameBox:SetScript("OnTextChanged", function(self)
 					KM:UpdateKeywordGroup(i, self:GetText())
 				end)
+				groupFrame.nameBox = nameBox
 				
 				-- 删除按钮
 				local delBtn = CreateButton(groupFrame, 50, 20, "删除")
@@ -2346,6 +2269,7 @@ function KM:ShowKeywordGroupsUI()
 					KM:RemoveKeywordGroup(i)
 					KM:RefreshGroupsList()
 				end)
+				groupFrame.delBtn = delBtn
 				
 				-- 关键词输入框
 				local kwLabel = CreateFS(groupFrame, 11, "关键词:", false, "LEFT")
@@ -2358,6 +2282,7 @@ function KM:ShowKeywordGroupsUI()
 					KM:UpdateKeywordGroup(i, nil, self:GetText())
 					KM:UpdateKeywordList()
 				end)
+				groupFrame.kwBox = kwBox
 				
 				tinsert(scrollChild.groups, groupFrame)
 				yOffset = yOffset - 90
@@ -2454,12 +2379,7 @@ function KM:ShowHistoryUI()
 		
 		-- 刷新历史记录列表
 		function KM:RefreshHistoryList(searchText)
-			if scrollChild.records then
-				for _, r in ipairs(scrollChild.records) do
-					r:Hide()
-					r:SetParent(nil)
-				end
-			end
+			CleanupUIElements(scrollChild.records)
 			scrollChild.records = {}
 			
 			local history = searchText and KM:SearchHistory(searchText) or KM:GetHistory()
@@ -2621,12 +2541,7 @@ function KM:ShowQuickReplyUI()
 		
 		-- 刷新回复列表
 		function KM:RefreshQuickReplyList()
-			if scrollChild.replies then
-				for _, r in ipairs(scrollChild.replies) do
-					r:Hide()
-					r:SetParent(nil)
-				end
-			end
+			CleanupUIElements(scrollChild.replies)
 			scrollChild.replies = {}
 			
 			local yOffset = -5
@@ -2687,7 +2602,8 @@ function KM:ShowQuickReplyUI()
 	end
 end
 
--- 为特定玩家显示快速回复选择
+-- 为特定玩家显示快速回复选择（修复内存泄漏 - 复用Frame）
+local quickReplyMenu = nil
 function KM:ShowQuickReplyForPlayer(playerName)
 	EnsureConfig()
 	
@@ -2696,122 +2612,146 @@ function KM:ShowQuickReplyForPlayer(playerName)
 		return
 	end
 	
-	-- 创建简单的选择菜单
-	local menu = CreateFrame("Frame", "KeywordMonitor_QuickReplyMenu", UIParent, "BackdropTemplate")
-	menu:SetSize(250, 30 * #KeywordMonitorDB.QuickReplies + 10)
-	menu:SetPoint("CENTER")
-	menu:SetFrameStrata("TOOLTIP")
-	menu:SetFrameLevel(200)
-	
-	if KeywordMonitorDB.UseNDuiStyle then
-		menu:SetBackdrop({
-			bgFile = "Interface\\Buttons\\WHITE8X8",
-			edgeFile = "Interface\\Buttons\\WHITE8X8",
-			edgeSize = 1,
-		})
-		menu:SetBackdropColor(0, 0, 0, 0.95)
-		menu:SetBackdropBorderColor(0, 0, 0, 1)
+	-- 如果已存在menu，先清理
+	if quickReplyMenu then
+		quickReplyMenu:Hide()
+		-- 清理所有按钮
+		if quickReplyMenu.buttons then
+			CleanupUIElements(quickReplyMenu.buttons)
+		end
 	else
-		menu:SetBackdrop({
-			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-			tile = true,
-			tileSize = 16,
-			edgeSize = 12,
-			insets = { left = 2, right = 2, top = 2, bottom = 2 }
-		})
+		-- 创建简单的选择菜单（只创建一次）
+		quickReplyMenu = CreateFrame("Frame", "KeywordMonitor_QuickReplyMenu", UIParent, "BackdropTemplate")
+		quickReplyMenu:SetFrameStrata("TOOLTIP")
+		quickReplyMenu:SetFrameLevel(200)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			quickReplyMenu:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			quickReplyMenu:SetBackdropColor(0, 0, 0, 0.95)
+			quickReplyMenu:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			quickReplyMenu:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+				tile = true,
+				tileSize = 16,
+				edgeSize = 12,
+				insets = { left = 2, right = 2, top = 2, bottom = 2 }
+			})
+		end
+		
+		-- 点击外部关闭
+		quickReplyMenu:SetScript("OnHide", function(self)
+			-- 取消自动关闭定时器
+			if self.autoCloseTimer then
+				self.autoCloseTimer:Cancel()
+				self.autoCloseTimer = nil
+			end
+		end)
 	end
 	
+	-- 设置大小和位置
+	quickReplyMenu:SetSize(250, 30 * #KeywordMonitorDB.QuickReplies + 10)
+	quickReplyMenu:SetPoint("CENTER")
+	
+	-- 创建按钮
+	quickReplyMenu.buttons = {}
 	local yOffset = -5
 	for i, replyText in ipairs(KeywordMonitorDB.QuickReplies) do
-		local btn = CreateButton(menu, 230, 25, replyText)
+		local btn = CreateButton(quickReplyMenu, 230, 25, replyText)
 		btn:SetPoint("TOP", 0, yOffset)
 		btn:SetScript("OnClick", function()
-			menu:Hide()
+			quickReplyMenu:Hide()
 			-- 显示二次确认对话框
 			KM:ShowQuickReplyConfirmation(playerName, replyText)
 		end)
+		table.insert(quickReplyMenu.buttons, btn)
 		yOffset = yOffset - 30
 	end
 	
-	-- 点击外部关闭
-	menu:SetScript("OnHide", function(self)
-		C_Timer.After(0.1, function()
-			self:SetParent(nil)
-		end)
-	end)
-	
-	menu:Show()
+	quickReplyMenu:Show()
 	
 	-- 3秒后自动关闭
-	C_Timer.After(3, function()
-		if menu:IsShown() then
-			menu:Hide()
+	if quickReplyMenu.autoCloseTimer then
+		quickReplyMenu.autoCloseTimer:Cancel()
+	end
+	quickReplyMenu.autoCloseTimer = C_Timer.NewTimer(3, function()
+		if quickReplyMenu and quickReplyMenu:IsShown() then
+			quickReplyMenu:Hide()
 		end
 	end)
 end
 
--- 显示快速回复确认对话框
+-- 显示快速回复确认对话框（修复内存泄漏 - 复用Frame）
+local quickReplyConfirmFrame = nil
 function KM:ShowQuickReplyConfirmation(playerName, replyText)
-	local confirmFrame = CreateFrame("Frame", "KeywordMonitor_QuickReplyConfirm", UIParent, "BackdropTemplate")
-	confirmFrame:SetSize(350, 120)
-	confirmFrame:SetPoint("CENTER")
-	confirmFrame:SetFrameStrata("DIALOG")
-	confirmFrame:SetFrameLevel(250)
-	
-	if KeywordMonitorDB.UseNDuiStyle then
-		confirmFrame:SetBackdrop({
-			bgFile = "Interface\\Buttons\\WHITE8X8",
-			edgeFile = "Interface\\Buttons\\WHITE8X8",
-			edgeSize = 1,
-		})
-		confirmFrame:SetBackdropColor(0, 0, 0, 0.95)
-		confirmFrame:SetBackdropBorderColor(0, 0, 0, 1)
-	else
-		confirmFrame:SetBackdrop({
-			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-			edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-			tile = true,
-			tileSize = 32,
-			edgeSize = 32,
-			insets = { left = 11, right = 12, top = 12, bottom = 11 }
-		})
+	if not quickReplyConfirmFrame then
+		-- 只创建一次
+		quickReplyConfirmFrame = CreateFrame("Frame", "KeywordMonitor_QuickReplyConfirm", UIParent, "BackdropTemplate")
+		quickReplyConfirmFrame:SetSize(350, 120)
+		quickReplyConfirmFrame:SetFrameStrata("DIALOG")
+		quickReplyConfirmFrame:SetFrameLevel(250)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			quickReplyConfirmFrame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			quickReplyConfirmFrame:SetBackdropColor(0, 0, 0, 0.95)
+			quickReplyConfirmFrame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			quickReplyConfirmFrame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		quickReplyConfirmFrame.title = CreateFS(quickReplyConfirmFrame, 14, "确认发送", true)
+		quickReplyConfirmFrame.title:SetPoint("TOP", 0, -15)
+		quickReplyConfirmFrame.title:SetTextColor(1, 0.8, 0)
+		
+		quickReplyConfirmFrame.message = CreateFS(quickReplyConfirmFrame, 12, "", false, "CENTER")
+		quickReplyConfirmFrame.message:SetPoint("TOP", 0, -40)
+		
+		quickReplyConfirmFrame.replyPreview = CreateFS(quickReplyConfirmFrame, 11, "", false, "CENTER")
+		quickReplyConfirmFrame.replyPreview:SetPoint("TOP", 0, -60)
+		
+		quickReplyConfirmFrame.confirmBtn = CreateButton(quickReplyConfirmFrame, 80, 25, "确定")
+		quickReplyConfirmFrame.confirmBtn:SetPoint("BOTTOM", -45, 15)
+		
+		quickReplyConfirmFrame.cancelBtn = CreateButton(quickReplyConfirmFrame, 80, 25, "取消")
+		quickReplyConfirmFrame.cancelBtn:SetPoint("BOTTOM", 45, 15)
+		quickReplyConfirmFrame.cancelBtn:SetScript("OnClick", function()
+			quickReplyConfirmFrame:Hide()
+		end)
 	end
 	
-	local title = CreateFS(confirmFrame, 14, "确认发送", true)
-	title:SetPoint("TOP", 0, -15)
-	title:SetTextColor(1, 0.8, 0)
+	-- 更新内容
+	quickReplyConfirmFrame.message:SetText(string.format("确定要向 |cffFFFF00%s|r 发送:", playerName))
+	quickReplyConfirmFrame.replyPreview:SetText(string.format("|cff00FF00\"%s\"|r", replyText))
 	
-	local message = CreateFS(confirmFrame, 12, string.format("确定要向 |cffFFFF00%s|r 发送:", playerName), false, "CENTER")
-	message:SetPoint("TOP", 0, -40)
-	
-	local replyPreview = CreateFS(confirmFrame, 11, string.format("|cff00FF00\"%s\"|r", replyText), false, "CENTER")
-	replyPreview:SetPoint("TOP", 0, -60)
-	
-	local confirmBtn = CreateButton(confirmFrame, 80, 25, "确定")
-	confirmBtn:SetPoint("BOTTOM", -45, 15)
-	confirmBtn:SetScript("OnClick", function()
+	-- 更新确定按钮的点击事件
+	quickReplyConfirmFrame.confirmBtn:SetScript("OnClick", function()
 		KM:SendQuickReply(playerName, replyText)
-		confirmFrame:Hide()
+		quickReplyConfirmFrame:Hide()
 		print("|cff00FF00[ChatKeyword]|r 已向 " .. playerName .. " 发送: " .. replyText)
 	end)
 	
-	local cancelBtn = CreateButton(confirmFrame, 80, 25, "取消")
-	cancelBtn:SetPoint("BOTTOM", 45, 15)
-	cancelBtn:SetScript("OnClick", function()
-		confirmFrame:Hide()
-	end)
-	
-	confirmFrame:SetScript("OnHide", function(self)
-		C_Timer.After(0.1, function()
-			self:SetParent(nil)
-		end)
-	end)
-	
-	confirmFrame:Show()
+	quickReplyConfirmFrame:SetPoint("CENTER")
+	quickReplyConfirmFrame:Show()
 end
 
--- 更新统计数据
+-- 更新统计数据（极致优化版 - 避免频繁遍历）
+local keywordCountsSize = 0  -- 缓存关键词数量，避免每次都遍历
 function KM:UpdateStatistics(keyword, time)
 	EnsureConfig()
 	
@@ -2821,23 +2761,22 @@ function KM:UpdateStatistics(keyword, time)
 	-- 增加总匹配次数
 	KeywordMonitorDB.Statistics.TotalMatches = KeywordMonitorDB.Statistics.TotalMatches + 1
 	
-	-- 记录关键词匹配次数
-	local matchedKeywords = {}
+	-- 简化关键词统计 - 不再限制数量，让自然淘汰
 	if type(keyword) == "string" then
 		if not KeywordMonitorDB.Statistics.KeywordCounts[keyword] then
 			KeywordMonitorDB.Statistics.KeywordCounts[keyword] = 0
+			keywordCountsSize = keywordCountsSize + 1
 		end
 		KeywordMonitorDB.Statistics.KeywordCounts[keyword] = KeywordMonitorDB.Statistics.KeywordCounts[keyword] + 1
-		tinsert(matchedKeywords, keyword)
 	elseif type(keyword) == "table" then
 		-- 组合关键词，记录每个子关键词
 		for _, subKey in ipairs(keyword) do
 			if sub(subKey, 1, 1) ~= "&" then
 				if not KeywordMonitorDB.Statistics.KeywordCounts[subKey] then
 					KeywordMonitorDB.Statistics.KeywordCounts[subKey] = 0
+					keywordCountsSize = keywordCountsSize + 1
 				end
 				KeywordMonitorDB.Statistics.KeywordCounts[subKey] = KeywordMonitorDB.Statistics.KeywordCounts[subKey] + 1
-				tinsert(matchedKeywords, subKey)
 			end
 		end
 	end
@@ -2849,14 +2788,11 @@ function KM:UpdateStatistics(keyword, time)
 	end
 	KeywordMonitorDB.Statistics.HourCounts[hour] = KeywordMonitorDB.Statistics.HourCounts[hour] + 1
 	
-	-- 更新趋势数据
-	KM:UpdateTrendData(matchedKeywords, time)
-	
-	-- 更新关键词关联
-	KM:UpdateKeywordCorrelation(matchedKeywords)
+	-- 不再调用趋势数据和关联分析，已经注释掉了
 end
 
--- 更新趋势数据
+-- 更新趋势数据（优化版 - 减少频繁操作）
+local lastTrendCleanup = 0
 function KM:UpdateTrendData(keywords, time)
 	EnsureConfig()
 	
@@ -2937,67 +2873,82 @@ function KM:UpdateTrendData(keywords, time)
 		hourlyKeywords[kw] = hourlyKeywords[kw] + 1
 	end
 	
-	-- 清理旧的小时数据（保留最近48小时）
-	local currentTime = time
-	for hourKey, _ in pairs(KeywordMonitorDB.TrendData.Hourly) do
-		local year, month, day, hour = hourKey:match("(%d+)-(%d+)-(%d+)-(%d+)")
-		if year and month and day and hour then
-			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = tonumber(hour), min = 0, sec = 0})
-			if currentTime - dataTime > 48 * 3600 then
-				KeywordMonitorDB.TrendData.Hourly[hourKey] = nil
+	-- 只在每小时清理一次旧数据，而不是每条消息都清理
+	local currentTime = GetTime()
+	if currentTime - lastTrendCleanup > 3600 then
+		lastTrendCleanup = currentTime
+		
+		local serverTime = GetServerTime()
+		-- 清理旧的小时数据（保留最近48小时）
+		for hourKey, _ in pairs(KeywordMonitorDB.TrendData.Hourly) do
+			local year, month, day, hour = hourKey:match("(%d+)-(%d+)-(%d+)-(%d+)")
+			if year and month and day and hour then
+				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = tonumber(hour), min = 0, sec = 0})
+				if serverTime - dataTime > 48 * 3600 then
+					KeywordMonitorDB.TrendData.Hourly[hourKey] = nil
+				end
 			end
 		end
-	end
-	
-	-- 清理超过30天的每日数据
-	for dateKey, _ in pairs(KeywordMonitorDB.TrendData.Daily) do
-		local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
-		if year and month and day then
-			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
-			if currentTime - dataTime > 30 * 86400 then
-				KeywordMonitorDB.TrendData.Daily[dateKey] = nil
+		
+		-- 清理超过30天的每日数据
+		for dateKey, _ in pairs(KeywordMonitorDB.TrendData.Daily) do
+			local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
+			if year and month and day then
+				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+				if serverTime - dataTime > 30 * 86400 then
+					KeywordMonitorDB.TrendData.Daily[dateKey] = nil
+				end
 			end
 		end
-	end
-	
-	-- 对于7-30天的数据，只保留总数，删除关键词明细
-	for dateKey, data in pairs(KeywordMonitorDB.TrendData.Daily) do
-		local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
-		if year and month and day then
-			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
-			if currentTime - dataTime > 7 * 86400 and currentTime - dataTime <= 30 * 86400 then
-				-- 只保留总数
-				data.keywords = {}
+		
+		-- 对于7-30天的数据，只保留总数，删除关键词明细
+		for dateKey, data in pairs(KeywordMonitorDB.TrendData.Daily) do
+			local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
+			if year and month and day then
+				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+				if serverTime - dataTime > 7 * 86400 and serverTime - dataTime <= 30 * 86400 then
+					-- 只保留总数
+					data.keywords = {}
+				end
 			end
 		end
 	end
 end
 
--- 更新关键词关联
+-- 更新关键词关联（优化版 - 减少频繁检查）
+local lastCorrelationCleanup = 0
+local correlationUpdateCount = 0
 function KM:UpdateKeywordCorrelation(keywords)
 	EnsureConfig()
 	
 	-- 如果只有一个关键词，无需记录关联
 	if #keywords < 2 then return end
 	
-	-- 限制关联表大小 - 更激进的限制
-	local totalCorrelations = 0
-	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
-		totalCorrelations = totalCorrelations + KM:GetTableSize(correlations)
-	end
+	correlationUpdateCount = correlationUpdateCount + 1
 	
-	-- 如果总关联数超过100，清理低频数据
-	if totalCorrelations > 100 then
+	-- 只在每100次更新后检查一次大小，而不是每次都检查
+	if correlationUpdateCount >= 100 then
+		correlationUpdateCount = 0
+		
+		-- 限制关联表大小 - 更激进的限制
+		local totalCorrelations = 0
 		for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
-			for kw2, count in pairs(correlations) do
-				-- 清理关联次数<5的数据（更严格）
-				if count < 5 then
-					correlations[kw2] = nil
+			totalCorrelations = totalCorrelations + KM:GetTableSize(correlations)
+		end
+		
+		-- 如果总关联数超过100，清理低频数据
+		if totalCorrelations > 100 then
+			for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+				for kw2, count in pairs(correlations) do
+					-- 清理关联次数<5的数据（更严格）
+					if count < 5 then
+						correlations[kw2] = nil
+					end
 				end
-			end
-			-- 如果该关键词没有关联了，删除整个条目
-			if KM:GetTableSize(correlations) == 0 then
-				KeywordMonitorDB.KeywordCorrelation[kw1] = nil
+				-- 如果该关键词没有关联了，删除整个条目
+				if KM:GetTableSize(correlations) == 0 then
+					KeywordMonitorDB.KeywordCorrelation[kw1] = nil
+				end
 			end
 		end
 	end
@@ -3146,92 +3097,6 @@ function KM:ResetStatistics()
 	print("|cff00FF00[ChatKeyword]|r 统计数据已重置")
 end
 
--- 从消息中学习（提取高频词汇）
-function KM:LearnFromMessage(msg)
-	EnsureConfig()
-	
-	if not KeywordMonitorDB.SmartLearning.Enabled then
-		return
-	end
-	
-	-- 采样策略：只学习20%的消息，减少处理量
-	if math.random(100) > 20 then
-		return
-	end
-	
-	-- 限制词频表大小，避免无限增长
-	local maxWords = 150  -- 从200降低到150
-	local currentWordCount = KM:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency)
-	
-	if currentWordCount > maxWords then
-		-- 清理低频词（出现次数<3，更严格）
-		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-			if count < 3 then
-				KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
-			end
-		end
-	end
-	
-	-- 清理消息文本
-	local cleanMsg = CleanText(msg)
-	
-	-- 限制消息长度，避免处理过长消息
-	if #cleanMsg > 100 then  -- 从200降低到100
-		cleanMsg = sub(cleanMsg, 1, 100)
-	end
-	
-	-- 常见无意义词列表（中文停用词）
-	local stopWords = {
-		["的"] = true, ["了"] = true, ["是"] = true, ["在"] = true,
-		["我"] = true, ["有"] = true, ["和"] = true, ["就"] = true,
-		["不"] = true, ["人"] = true, ["都"] = true, ["一"] = true,
-		["个"] = true, ["上"] = true, ["也"] = true, ["很"] = true,
-		["到"] = true, ["说"] = true, ["要"] = true, ["去"] = true,
-		["你"] = true, ["会"] = true, ["着"] = true, ["没"] = true,
-		["看"] = true, ["好"] = true, ["自"] = true, ["己"] = true,
-	}
-	
-	-- 提取2-4个字符的词汇（中文通常是2-4个字）
-	local extractedWords = {}
-	
-	for i = 1, #cleanMsg do
-		-- 提取2字词
-		if i + 1 <= #cleanMsg then
-			local word = sub(cleanMsg, i, i + 1)
-			if #word >= 2 and not stopWords[word] then
-				extractedWords[word] = true
-			end
-		end
-		
-		-- 提取3字词
-		if i + 2 <= #cleanMsg then
-			local word = sub(cleanMsg, i, i + 2)
-			if #word >= 3 and not stopWords[word] then
-				extractedWords[word] = true
-			end
-		end
-		
-		-- 提取4字词
-		if i + 3 <= #cleanMsg then
-			local word = sub(cleanMsg, i, i + 3)
-			if #word >= 4 and not stopWords[word] then
-				extractedWords[word] = true
-			end
-		end
-	end
-	
-	-- 记录词频（去重后）
-	for word, _ in pairs(extractedWords) do
-		KM:RecordWord(word)
-	end
-	
-	-- 检查是否需要显示建议（降低频率）
-	-- 只在词频表有足够数据时才检查
-	if currentWordCount > 50 then
-		KM:CheckAndShowSuggestions()
-	end
-end
-
 -- 获取表大小
 function KM:GetTableSize(t)
 	local count = 0
@@ -3257,10 +3122,6 @@ function KM:DiagnoseMemory()
 	local hourlyCount = KM:GetTableSize(KeywordMonitorDB.TrendData.Hourly)
 	print(string.format("趋势数据: 每日 %d 天, 每小时 %d 条", dailyCount, hourlyCount))
 	
-	-- 智能学习
-	local wordCount = KM:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency)
-	print(string.format("智能学习: %d 个词汇", wordCount))
-	
 	-- 关键词关联
 	local correlationCount = 0
 	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
@@ -3281,129 +3142,10 @@ function KM:DiagnoseMemory()
 	if historyCount > 50 then
 		print("  • 历史记录较多，可减少保留数量")
 	end
-	if wordCount > 100 then
-		print("  • 智能学习词汇过多，建议清理或关闭")
-	end
 	if correlationCount > 200 then
 		print("  • 关键词关联数据过多，建议清理")
 	end
 	print("  • 点击'优化内存'按钮进行清理")
-end
-
--- 记录词汇频率
-function KM:RecordWord(word)
-	EnsureConfig()
-	
-	-- 过滤已存在的关键词
-	for _, kw in ipairs(keywords) do
-		if type(kw) == "string" and find(upper(word), kw, 1, true) then
-			return
-		end
-	end
-	
-	-- 过滤已忽略的词
-	if KeywordMonitorDB.SmartLearning.IgnoredWords[word] then
-		return
-	end
-	
-	-- 记录词频
-	if not KeywordMonitorDB.SmartLearning.WordFrequency[word] then
-		KeywordMonitorDB.SmartLearning.WordFrequency[word] = 0
-	end
-	KeywordMonitorDB.SmartLearning.WordFrequency[word] = KeywordMonitorDB.SmartLearning.WordFrequency[word] + 1
-end
-
--- 检查并显示建议
-function KM:CheckAndShowSuggestions()
-	EnsureConfig()
-	
-	local currentTime = GetTime()
-	local lastTime = KeywordMonitorDB.SmartLearning.LastSuggestionTime or 0
-	local interval = KeywordMonitorDB.SmartLearning.SuggestionInterval or 3600
-	
-	-- 检查是否到了建议时间
-	if currentTime - lastTime < interval then
-		return
-	end
-	
-	-- 获取高频词汇
-	local suggestions = KM:GetSmartSuggestions()
-	
-	if #suggestions > 0 then
-		-- 更新建议时间
-		KeywordMonitorDB.SmartLearning.LastSuggestionTime = currentTime
-		
-		-- 显示提示
-		local wordList = {}
-		for i = 1, math.min(3, #suggestions) do
-			tinsert(wordList, suggestions[i].word)
-		end
-		
-		print("|cff00FF00[ChatKeyword 智能建议]|r 您近期频繁关注 |cffFFFF00" .. table.concat(wordList, "、") .. "|r，是否将其设为关键词？")
-		print("|cff00FF00[ChatKeyword]|r 打开配置界面，点击 |cffFFFF00智能建议|r 按钮查看更多")
-	end
-end
-
--- 获取智能建议（高频词汇）
-function KM:GetSmartSuggestions()
-	EnsureConfig()
-	
-	local minFreq = KeywordMonitorDB.SmartLearning.MinFrequency or 5
-	local suggestions = {}
-	
-	for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-		if count >= minFreq then
-			tinsert(suggestions, {word = word, count = count})
-		end
-	end
-	
-	-- 按频率排序
-	table.sort(suggestions, function(a, b) return a.count > b.count end)
-	
-	return suggestions
-end
-
--- 添加建议词为关键词
-function KM:AddSuggestedKeyword(word)
-	EnsureConfig()
-	
-	-- 添加到关键词
-	local currentKeywords = KeywordMonitorDB.Keywords or ""
-	if currentKeywords == "" then
-		KeywordMonitorDB.Keywords = word
-	else
-		KeywordMonitorDB.Keywords = currentKeywords .. "," .. word
-	end
-	
-	-- 更新关键词列表
-	KM:UpdateKeywordList(KeywordMonitorDB.Keywords)
-	
-	-- 从学习数据中移除
-	KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
-	
-	print("|cff00FF00[ChatKeyword]|r 已添加关键词: " .. word)
-end
-
--- 忽略建议词
-function KM:IgnoreSuggestedKeyword(word)
-	EnsureConfig()
-	
-	-- 添加到忽略列表
-	KeywordMonitorDB.SmartLearning.IgnoredWords[word] = true
-	
-	-- 从学习数据中移除
-	KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
-	
-	print("|cff00FF00[ChatKeyword]|r 已忽略建议: " .. word)
-end
-
--- 清空学习数据
-function KM:ClearLearningData()
-	EnsureConfig()
-	KeywordMonitorDB.SmartLearning.WordFrequency = {}
-	KeywordMonitorDB.SmartLearning.IgnoredWords = {}
-	KeywordMonitorDB.SmartLearning.LastSuggestionTime = 0
-	print("|cff00FF00[ChatKeyword]|r 学习数据已清空")
 end
 
 -- 获取最常匹配的关键词（前N个）
@@ -3624,12 +3366,7 @@ function KM:ShowStatisticsUI()
 			frame.totalValue:SetText(tostring(stats.TotalMatches))
 			
 			-- 更新最常匹配的关键词
-			if frame.keywordsScrollChild.items then
-				for _, item in ipairs(frame.keywordsScrollChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(frame.keywordsScrollChild.items)
 			frame.keywordsScrollChild.items = {}
 			
 			local topKeywords = KM:GetTopKeywords(10)
@@ -3646,12 +3383,7 @@ function KM:ShowStatisticsUI()
 			frame.keywordsScrollChild:SetHeight(math.max(1, -yOffset))
 			
 			-- 更新最活跃的时间段
-			if frame.hoursScrollChild.items then
-				for _, item in ipairs(frame.hoursScrollChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(frame.hoursScrollChild.items)
 			frame.hoursScrollChild.items = {}
 			
 			local topHours = KM:GetTopHours(10)
@@ -4179,12 +3911,7 @@ function KM:ShowPresetsUI()
 		-- 刷新预设列表
 		function KM:RefreshPresetsList()
 			-- 清空内置预设
-			if builtinChild.items then
-				for _, item in ipairs(builtinChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(builtinChild.items)
 			builtinChild.items = {}
 			
 			local yOffset = -5
@@ -4241,12 +3968,7 @@ function KM:ShowPresetsUI()
 			builtinChild:SetHeight(math.max(1, -yOffset))
 			
 			-- 清空用户预设
-			if userChild.items then
-				for _, item in ipairs(userChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(userChild.items)
 			userChild.items = {}
 			
 			if #KeywordMonitorDB.Presets == 0 then
@@ -4717,12 +4439,7 @@ function KM:ShowTrendAnalysisUI()
 			end
 			
 			-- 刷新关键词列表
-			if frame.kwChild.items then
-				for _, item in ipairs(frame.kwChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(frame.kwChild.items)
 			frame.kwChild.items = {}
 			
 			local topKeywords = KM:GetTopKeywords(20)
@@ -4866,12 +4583,7 @@ function KM:ShowCorrelationAnalysisUI()
 		-- 刷新关联分析
 		function KM:RefreshCorrelationAnalysis(selectedKeyword)
 			-- 刷新关键词列表
-			if frame.kwChild.items then
-				for _, item in ipairs(frame.kwChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(frame.kwChild.items)
 			frame.kwChild.items = {}
 			
 			local topKeywords = KM:GetTopKeywords(30)
@@ -4889,12 +4601,7 @@ function KM:ShowCorrelationAnalysisUI()
 			frame.kwChild:SetHeight(math.max(1, -yOffset))
 			
 			-- 刷新关联关键词
-			if frame.correlationChild.items then
-				for _, item in ipairs(frame.correlationChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
+			CleanupUIElements(frame.correlationChild.items)
 			frame.correlationChild.items = {}
 			
 			if selectedKeyword then
@@ -5151,24 +4858,14 @@ function KM:ShowPerformanceUI()
 			end
 		end
 		
-		-- 自动刷新
+		-- 自动刷新（禁用自动刷新，改为手动刷新）
 		frame:SetScript("OnShow", function()
 			KM:RefreshPerformance()
-			-- 每2秒刷新一次
-			if not frame.ticker then
-				frame.ticker = C_Timer.NewTicker(2, function()
-					if frame:IsShown() then
-						KM:RefreshPerformance()
-					end
-				end)
-			end
+			-- 不再自动刷新，避免性能监控界面本身导致内存增长
 		end)
 		
 		frame:SetScript("OnHide", function()
-			if frame.ticker then
-				frame.ticker:Cancel()
-				frame.ticker = nil
-			end
+			-- 清理
 		end)
 		
 		self.performanceFrame = frame
@@ -5178,194 +4875,6 @@ function KM:ShowPerformanceUI()
 		self.performanceFrame:Hide()
 	else
 		self.performanceFrame:Show()
-	end
-end
-
--- 显示智能建议界面
-function KM:ShowSmartSuggestionsUI()
-	EnsureConfig()
-	
-	if not self.suggestionsFrame then
-		local frame = CreateFrame("Frame", "KeywordMonitor_SuggestionsUI", UIParent, "BackdropTemplate")
-		frame:SetSize(500, 450)
-		frame:SetPoint("CENTER")
-		frame:SetFrameStrata("DIALOG")
-		frame:SetFrameLevel(100)
-		
-		if KeywordMonitorDB.UseNDuiStyle then
-			frame:SetBackdrop({
-				bgFile = "Interface\\Buttons\\WHITE8X8",
-				edgeFile = "Interface\\Buttons\\WHITE8X8",
-				edgeSize = 1,
-			})
-			frame:SetBackdropColor(0, 0, 0, 0.9)
-			frame:SetBackdropBorderColor(0, 0, 0, 1)
-		else
-			frame:SetBackdrop({
-				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
-				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-				tile = true,
-				tileSize = 32,
-				edgeSize = 32,
-				insets = { left = 11, right = 12, top = 12, bottom = 11 }
-			})
-		end
-		
-		frame:Hide()
-		frame:SetMovable(true)
-		frame:EnableMouse(true)
-		frame:RegisterForDrag("LeftButton")
-		frame:SetScript("OnDragStart", frame.StartMoving)
-		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
-		
-		local title = CreateFS(frame, 16, "智能建议 - 高频词汇", true)
-		title:SetPoint("TOP", 0, -10)
-		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
-		closeBtn:SetScript("OnClick", function() frame:Hide() end)
-		
-		-- 说明文字
-		local desc = CreateFS(frame, 11, "插件自动学习您关注的消息中的高频词汇，建议添加为关键词", false, "LEFT")
-		desc:SetPoint("TOPLEFT", 20, -40)
-		desc:SetTextColor(0.7, 0.7, 0.7)
-		
-		-- 启用智能学习开关
-		local enableCheck = CreateCheckBox(frame)
-		enableCheck:SetPoint("TOPLEFT", 20, -65)
-		enableCheck:SetChecked(KeywordMonitorDB.SmartLearning.Enabled)
-		local enableLabel = CreateFS(frame, 12, "启用智能学习", false, "LEFT")
-		enableLabel:SetPoint("LEFT", enableCheck, "RIGHT", 5, 0)
-		
-		enableCheck:SetScript("OnClick", function(self)
-			KeywordMonitorDB.SmartLearning.Enabled = self:GetChecked()
-			print("|cff00FF00[ChatKeyword]|r 智能学习: " .. (KeywordMonitorDB.SmartLearning.Enabled and "|cff00FF00已启用|r" or "|cffFF0000已禁用|r"))
-		end)
-		
-		-- 建议列表
-		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-		scrollFrame:SetPoint("TOPLEFT", 20, -95)
-		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 50)
-		
-		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-		scrollChild:SetSize(440, 1)
-		scrollFrame:SetScrollChild(scrollChild)
-		frame.scrollChild = scrollChild
-		
-		-- 刷新建议列表
-		function KM:RefreshSuggestions()
-			if scrollChild.items then
-				for _, item in ipairs(scrollChild.items) do
-					item:Hide()
-					item:SetParent(nil)
-				end
-			end
-			scrollChild.items = {}
-			
-			local suggestions = KM:GetSmartSuggestions()
-			
-			if #suggestions == 0 then
-				local noData = CreateFS(scrollChild, 12, "暂无建议数据，继续使用插件后会自动学习", false, "CENTER")
-				noData:SetPoint("TOP", 0, -50)
-				noData:SetTextColor(0.7, 0.7, 0.7)
-				tinsert(scrollChild.items, noData)
-				scrollChild:SetHeight(1)
-				return
-			end
-			
-			local yOffset = -5
-			for i, data in ipairs(suggestions) do
-				local itemFrame = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
-				itemFrame:SetSize(420, 35)
-				itemFrame:SetPoint("TOPLEFT", 10, yOffset)
-				
-				if KeywordMonitorDB.UseNDuiStyle then
-					itemFrame:SetBackdrop({
-						bgFile = "Interface\\Buttons\\WHITE8X8",
-						edgeFile = "Interface\\Buttons\\WHITE8X8",
-						edgeSize = 1,
-					})
-					itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
-					itemFrame:SetBackdropBorderColor(0, 0, 0, 1)
-				else
-					itemFrame:SetBackdrop({
-						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-						tile = true,
-						tileSize = 16,
-						edgeSize = 12,
-						insets = { left = 2, right = 2, top = 2, bottom = 2 }
-					})
-					itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
-				end
-				
-				-- 词汇和频率
-				local wordText = CreateFS(itemFrame, 13, data.word, true, "LEFT")
-				wordText:SetPoint("LEFT", 10, 0)
-				wordText:SetTextColor(1, 0.8, 0)
-				
-				local countText = CreateFS(itemFrame, 11, string.format("(出现%d次)", data.count), false, "LEFT")
-				countText:SetPoint("LEFT", wordText, "RIGHT", 10, 0)
-				countText:SetTextColor(0.7, 0.7, 0.7)
-				
-				-- 添加按钮
-				local addBtn = CreateButton(itemFrame, 60, 25, "添加")
-				addBtn:SetPoint("RIGHT", -70, 0)
-				addBtn:SetScript("OnClick", function()
-					KM:AddSuggestedKeyword(data.word)
-					KM:RefreshSuggestions()
-				end)
-				
-				-- 忽略按钮
-				local ignoreBtn = CreateButton(itemFrame, 60, 25, "忽略")
-				ignoreBtn:SetPoint("RIGHT", -5, 0)
-				ignoreBtn:SetScript("OnClick", function()
-					KM:IgnoreSuggestedKeyword(data.word)
-					KM:RefreshSuggestions()
-				end)
-				
-				tinsert(scrollChild.items, itemFrame)
-				yOffset = yOffset - 40
-			end
-			
-			scrollChild:SetHeight(math.max(1, -yOffset))
-		end
-		
-		-- 清空学习数据按钮
-		local clearBtn = CreateButton(frame, 120, 25, "清空学习数据")
-		clearBtn:SetPoint("BOTTOMLEFT", 20, 15)
-		clearBtn:SetScript("OnClick", function()
-			KM:ClearLearningData()
-			KM:RefreshSuggestions()
-		end)
-		
-		-- 全部添加按钮
-		local addAllBtn = CreateButton(frame, 100, 25, "全部添加")
-		addAllBtn:SetPoint("BOTTOM", 0, 15)
-		addAllBtn:SetScript("OnClick", function()
-			local suggestions = KM:GetSmartSuggestions()
-			local count = 0
-			for _, data in ipairs(suggestions) do
-				KM:AddSuggestedKeyword(data.word)
-				count = count + 1
-			end
-			if count > 0 then
-				print("|cff00FF00[ChatKeyword]|r 已添加 " .. count .. " 个建议关键词")
-				KM:RefreshSuggestions()
-			end
-		end)
-		
-		frame:SetScript("OnShow", function()
-			KM:RefreshSuggestions()
-		end)
-		
-		self.suggestionsFrame = frame
-	end
-	
-	if self.suggestionsFrame:IsShown() then
-		self.suggestionsFrame:Hide()
-	else
-		self.suggestionsFrame:Show()
 	end
 end
 
@@ -5411,6 +4920,11 @@ function KM:Init()
 		-- 每5分钟清理一次重复消息缓存
 		C_Timer.NewTicker(300, function()
 			CleanRepeatMessageCache()
+		end)
+		
+		-- 每10秒强制垃圾回收（更激进的内存管理）
+		C_Timer.NewTicker(10, function()
+			collectgarbage("collect")
 		end)
 	end)
 	
