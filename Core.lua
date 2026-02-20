@@ -6,14 +6,16 @@ local addonName = "KeywordMonitor"
 local KM = {}
 _G[addonName] = KM
 
--- 本地化函数
-local gsub, match, upper, strsplit, strlower, gmatch, find, sub = string.gsub, string.match, string.upper, strsplit, string.lower, string.gmatch, string.find, string.sub
-local GetServerTime, date, GetTime = GetServerTime, date, GetTime
+-- 本地化全局函数（性能优化 - 避免全局查找）
+local _G = _G
+local type, pairs, ipairs, next = type, pairs, ipairs, next
+local tinsert, tremove, wipe, sort = table.insert, table.remove, wipe or table.wipe, table.sort
+local gsub, match, upper, strsplit, strlower, gmatch, find, sub, format = string.gsub, string.match, string.upper, strsplit, string.lower, string.gmatch, string.find, string.sub, string.format
+local GetServerTime, date, GetTime, time = GetServerTime, date, GetTime, time
 local InCombatLockdown, PlaySound = InCombatLockdown, PlaySound
 local Ambiguate, IsShiftKeyDown, UnitName = Ambiguate, IsShiftKeyDown, UnitName
 local C_Timer, C_FriendList, C_BattleNet = C_Timer, C_FriendList, C_BattleNet
 local BNGetNumFriends, BNGetFriendInfoByID = BNGetNumFriends, BNGetFriendInfoByID
-local tinsert, tremove = table.insert, table.remove
 local GetPlayerInfoByGUID = GetPlayerInfoByGUID
 local RAID_CLASS_COLORS = RAID_CLASS_COLORS
 local FCF_StartAlertFlash = FCF_StartAlertFlash
@@ -22,13 +24,30 @@ local GetColoredName, GetPlayerLink = GetColoredName, GetPlayerLink
 local ChatFrame_ReplaceIconAndGroupExpressions = C_ChatInfo and C_ChatInfo.ReplaceIconAndGroupExpressions or ChatFrame_ReplaceIconAndGroupExpressions
 local ChatFrame_CanChatGroupPerformExpressionExpansion = ChatFrame_CanChatGroupPerformExpressionExpansion
 local BNET_CLIENT_WOW = BNET_CLIENT_WOW
+local CreateFrame = CreateFrame
+local UIParent = UIParent
+local GameTooltip = GameTooltip
+local ChatEdit_ChooseBoxForSend = ChatEdit_ChooseBoxForSend
+local ChatEdit_SendText = ChatEdit_SendText
+local ChatFrame_SendTell = ChatFrame_SendTell
+local UpdateAddOnMemoryUsage = UpdateAddOnMemoryUsage
+local GetAddOnMemoryUsage = GetAddOnMemoryUsage
+local GetChatWindowInfo = GetChatWindowInfo
+local NUM_CHAT_WINDOWS = NUM_CHAT_WINDOWS
+local STANDARD_TEXT_FONT = STANDARD_TEXT_FONT
+local SOUNDKIT = SOUNDKIT
+local PlaySoundFile = PlaySoundFile
+local collectgarbage = collectgarbage
+local loadstring = loadstring
+local pcall = pcall
+local tonumber, tostring = tonumber, tostring
+local math_floor, math_max, math_min, math_huge, math_random = math.floor, math.max, math.min, math.huge, math.random
 
 -- 全局变量
 local keywordFrame
 local keywords = {}
 local keywordButton
 local configFrame
-local lastSoundTime = 0
 
 -- 检测是否有 NDui
 local hasNDui = IsAddOnLoaded("NDui")
@@ -352,46 +371,40 @@ local function IsBlacklisted(name, text)
 	return false
 end
 
--- 检查是否是重复消息（优化版 - 使用固定大小的缓存）
+-- 检查是否是重复消息（优化版 - 使用固定大小的循环缓存）
 local repeatMessageCache = {}
-local repeatMessageCacheSize = 0
-local MAX_CACHE_SIZE = 50  -- 从100减少到50
+local repeatMessageIndex = {}  -- 用于快速查找
+local repeatMessageQueue = {}  -- 用于维护顺序
+local repeatMessageCount = 0
+local MAX_CACHE_SIZE = 50
 
 local function IsRepeatMessage(text)
 	local currentTime = GetTime()
 	
-	-- 检查是否重复
-	if repeatMessageCache[text] then
-		local lastTime = repeatMessageCache[text]
+	-- 快速查找
+	local cachedTime = repeatMessageIndex[text]
+	if cachedTime then
 		-- 如果在60秒内重复，返回true
-		if currentTime - lastTime < 60 then
-			repeatMessageCache[text] = currentTime
+		if currentTime - cachedTime < 60 then
+			repeatMessageIndex[text] = currentTime
 			return true
 		end
 	end
 	
-	-- 如果缓存满了，清理最旧的条目
-	if repeatMessageCacheSize >= MAX_CACHE_SIZE then
-		-- 清理所有超过60秒的条目
-		local cleaned = 0
-		for cachedText, timestamp in pairs(repeatMessageCache) do
-			if currentTime - timestamp > 60 then
-				repeatMessageCache[cachedText] = nil
-				cleaned = cleaned + 1
-			end
-		end
-		repeatMessageCacheSize = repeatMessageCacheSize - cleaned
-		
-		-- 如果还是满的，清空所有
-		if repeatMessageCacheSize >= MAX_CACHE_SIZE then
-			repeatMessageCache = {}
-			repeatMessageCacheSize = 0
+	-- 如果缓存满了，移除最旧的
+	if repeatMessageCount >= MAX_CACHE_SIZE then
+		local oldestText = repeatMessageQueue[1]
+		if oldestText then
+			repeatMessageIndex[oldestText] = nil
+			tremove(repeatMessageQueue, 1)
+			repeatMessageCount = repeatMessageCount - 1
 		end
 	end
 	
-	-- 添加到缓存
-	repeatMessageCache[text] = currentTime
-	repeatMessageCacheSize = repeatMessageCacheSize + 1
+	-- 添加新消息
+	repeatMessageIndex[text] = currentTime
+	tinsert(repeatMessageQueue, text)
+	repeatMessageCount = repeatMessageCount + 1
 	return false
 end
 
@@ -399,16 +412,21 @@ end
 local function CleanRepeatMessageCache()
 	local currentTime = GetTime()
 	local cleaned = 0
+	local newQueue = {}
 	
-	for text, timestamp in pairs(repeatMessageCache) do
-		-- 清理超过3分钟的
-		if currentTime - timestamp > 180 then
-			repeatMessageCache[text] = nil
+	for i = 1, #repeatMessageQueue do
+		local text = repeatMessageQueue[i]
+		local timestamp = repeatMessageIndex[text]
+		if timestamp and currentTime - timestamp <= 180 then
+			tinsert(newQueue, text)
+		else
+			repeatMessageIndex[text] = nil
 			cleaned = cleaned + 1
 		end
 	end
 	
-	repeatMessageCacheSize = repeatMessageCacheSize - cleaned
+	repeatMessageQueue = newQueue
+	repeatMessageCount = #newQueue
 	return cleaned
 end
 
@@ -427,48 +445,44 @@ local function SplitString(str, delimiter)
 	return result
 end
 
--- 工具函数：清理UI元素列表（防止内存泄漏）
+-- 工具函数：清理UI元素列表（防止内存泄漏 - 使用wipe优化）
 local function CleanupUIElements(elements)
 	if not elements then return end
-	for _, element in ipairs(elements) do
-		-- 清理所有SetScript
-		if element.SetScript then
-			element:SetScript("OnClick", nil)
-			element:SetScript("OnEnter", nil)
-			element:SetScript("OnLeave", nil)
-			element:SetScript("OnTextChanged", nil)
-			element:SetScript("OnShow", nil)
-			element:SetScript("OnHide", nil)
-		end
-		-- 清理子元素
-		for k, v in pairs(element) do
-			if type(v) == "table" and v.SetScript then
-				v:SetScript("OnClick", nil)
-				v:SetScript("OnEnter", nil)
-				v:SetScript("OnLeave", nil)
-				v:SetScript("OnTextChanged", nil)
+	for i = #elements, 1, -1 do
+		local element = elements[i]
+		if element then
+			-- 清理所有SetScript
+			if element.SetScript then
+				element:SetScript("OnClick", nil)
+				element:SetScript("OnEnter", nil)
+				element:SetScript("OnLeave", nil)
+				element:SetScript("OnTextChanged", nil)
+				element:SetScript("OnShow", nil)
+				element:SetScript("OnHide", nil)
 			end
+			-- 隐藏并移除
+			element:Hide()
+			element:SetParent(nil)
+			element:ClearAllPoints()
 		end
-		-- 隐藏并移除
-		element:Hide()
-		element:SetParent(nil)
-		element:ClearAllPoints()
 	end
+	-- 使用 wipe 清空表而不是创建新表
 	wipe(elements)
 end
 
--- 高亮关键词（优化版 - 减少内存分配）
+-- 高亮关键词（优化版 - 避免创建临时表）
 local function HighlightKeyword(msg, matchedKeyword)
 	if not matchedKeyword or not msg then return msg end
 	
-	-- 简化处理 - 只高亮第一个匹配的关键词
-	local keywordToHighlight = nil
+	-- 获取要高亮的关键词（避免创建新表）
+	local keywordToHighlight
 	
 	if type(matchedKeyword) == "string" then
 		keywordToHighlight = matchedKeyword
-	elseif type(matchedKeyword) == "table" and #matchedKeyword > 0 then
+	elseif type(matchedKeyword) == "table" then
 		-- 只取第一个非排除的关键词
-		for _, kw in ipairs(matchedKeyword) do
+		for i = 1, #matchedKeyword do
+			local kw = matchedKeyword[i]
 			if sub(kw, 1, 1) ~= "&" then
 				keywordToHighlight = kw
 				break
@@ -486,8 +500,8 @@ local function HighlightKeyword(msg, matchedKeyword)
 	if startPos then
 		local endPos = startPos + #keywordToHighlight - 1
 		local originalKeyword = sub(msg, startPos, endPos)
-		local highlighted = "|cff00FF00" .. originalKeyword .. "|r"
-		return sub(msg, 1, startPos - 1) .. highlighted .. sub(msg, endPos + 1)
+		-- 直接拼接，避免创建中间字符串
+		return sub(msg, 1, startPos - 1) .. "|cff00FF00" .. originalKeyword .. "|r" .. sub(msg, endPos + 1)
 	end
 	
 	return msg
@@ -772,7 +786,7 @@ function KM:CleanOldData()
 	for dateStr, _ in pairs(KeywordMonitorDB.TrendData.Daily) do
 		local year, month, day = dateStr:match("(%d+)-(%d+)-(%d+)")
 		if year and month and day then
-			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+			local dataTime = time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
 			if dataTime < cutoffTime then
 				KeywordMonitorDB.TrendData.Daily[dateStr] = nil
 				cleaned = cleaned + 1
@@ -788,30 +802,40 @@ function KM:CleanOldData()
 	KM:OptimizeMemory()
 end
 
--- 内存优化
+-- 内存优化（优化版 - 使用更高效的清理方式）
 function KM:OptimizeMemory()
 	EnsureConfig()
 	
 	local cleaned = 0
 	
 	-- 1. 限制历史记录
-	if #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount then
-		while #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount do
-			tremove(KeywordMonitorDB.History)
+	local history = KeywordMonitorDB.History
+	local historyMax = KeywordMonitorDB.HistoryMaxCount
+	if #history > historyMax then
+		local toRemove = #history - historyMax
+		for i = 1, toRemove do
+			tremove(history)
 			cleaned = cleaned + 1
 		end
 	end
 	
-	-- 2. 清理关键词关联低频数据（关联次数<5，更严格）
-	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+	-- 2. 清理关键词关联低频数据
+	local correlation = KeywordMonitorDB.KeywordCorrelation
+	for kw1, correlations in pairs(correlation) do
 		for kw2, count in pairs(correlations) do
-			if count < 5 then  -- 从3改为5
+			if count < 5 then
 				correlations[kw2] = nil
 				cleaned = cleaned + 1
 			end
 		end
-		if KM:GetTableSize(correlations) == 0 then
-			KeywordMonitorDB.KeywordCorrelation[kw1] = nil
+		-- 检查是否为空
+		local hasData = false
+		for _ in pairs(correlations) do
+			hasData = true
+			break
+		end
+		if not hasData then
+			correlation[kw1] = nil
 		end
 	end
 	
@@ -820,7 +844,8 @@ function KM:OptimizeMemory()
 	cleaned = cleaned + cacheCleared
 	
 	-- 4. 清理趋势数据中的低频关键词
-	for dateStr, data in pairs(KeywordMonitorDB.TrendData.Daily) do
+	local trendDaily = KeywordMonitorDB.TrendData.Daily
+	for dateStr, data in pairs(trendDaily) do
 		if data.keywords then
 			for kw, count in pairs(data.keywords) do
 				if count < 2 then
@@ -831,8 +856,10 @@ function KM:OptimizeMemory()
 		end
 	end
 	
-	-- 5. 强制垃圾回收
-	collectgarbage("collect")
+	-- 5. 只在清理了足够多数据后才执行垃圾回收
+	if cleaned > 10 then
+		collectgarbage("collect")
+	end
 	
 	return cleaned
 end
@@ -841,7 +868,7 @@ end
 function KM:CheckVersionUpdate()
 	EnsureConfig()
 	
-	local currentVersion = "1.7.1"
+	local currentVersion = "1.7.2"
 	local lastVersion = KeywordMonitorDB.LastVersion or ""
 	
 	if lastVersion ~= currentVersion then
@@ -881,12 +908,14 @@ function KM:ShowUpdateLog(currentVersion, lastVersion)
 		print("|cff00FF00[ChatKeyword]|r 插件已更新！")
 		print("|cff00FF00当前版本：|r v" .. currentVersion .. " |cff808080(上次: v" .. lastVersion .. ")|r")
 		print("|cff00FF00===========================================|r")
-		print("|cffFFFF00v1.7.1 更新内容：|r")
-		print("  • 全面优化内存管理，大幅降低内存占用")
-		print("  • 优化消息处理流程，减少字符串操作")
-		print("  • 简化高亮关键词算法")
-		print("  • 添加自动垃圾回收机制")
-		print("  • 优化重复消息缓存策略")
+		print("|cffFFFF00v1.7.2 更新内容：|r")
+		print("  • 学习 NDui/Recount 等优秀插件的内存管理技巧")
+		print("  • 本地化所有全局函数，避免全局查找")
+		print("  • 使用 wipe() 清空表而不是创建新表")
+		print("  • 优化重复消息缓存为循环队列结构")
+		print("  • 避免在循环和频繁调用中创建临时表")
+		print("  • 使用增量式GC代替强制GC，避免卡顿")
+		print("  • 保留所有原有功能，只优化内存管理")
 		print("|cff00FF00===========================================|r")
 	end
 end
@@ -924,8 +953,8 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 		return false
 	end
 	
-	local time = GetServerTime()
-	local timeStr = date("%H:%M", time)
+	local timestamp = GetServerTime()
+	local timeStr = date("%H:%M", timestamp)
 	
 	-- 简化频道名称获取
 	local channelString = select(2, ...)
@@ -977,7 +1006,7 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 	
 	-- 保存到历史记录（只保存最基本的信息）
 	KM:AddToHistory({
-		time = time,
+		time = timestamp,
 		timeStr = timeStr,
 		name = name,
 		msg = msg,
@@ -985,7 +1014,7 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 	})
 	
 	-- 更新统计数据
-	KM:UpdateStatistics(keyword, time)
+	KM:UpdateStatistics(keyword, timestamp)
 	
 	-- 更新性能统计
 	KM:UpdatePerformance()
@@ -2765,8 +2794,8 @@ function KM:ShowQuickReplyConfirmation(playerName, replyText)
 	quickReplyConfirmFrame:Show()
 end
 
--- 更新统计数据
-function KM:UpdateStatistics(keyword, time)
+-- 更新统计数据（优化版 - 避免创建临时表）
+function KM:UpdateStatistics(keyword, timestamp)
 	EnsureConfig()
 	
 	-- 增加今日匹配次数
@@ -2776,68 +2805,78 @@ function KM:UpdateStatistics(keyword, time)
 	KeywordMonitorDB.Statistics.TotalMatches = KeywordMonitorDB.Statistics.TotalMatches + 1
 	
 	-- 记录关键词匹配次数（限制最多50个关键词）
-	local matchedKeywords = {}
+	local keywordCounts = KeywordMonitorDB.Statistics.KeywordCounts
+	
+	-- 处理单个关键词
 	if type(keyword) == "string" then
-		if not KeywordMonitorDB.Statistics.KeywordCounts[keyword] then
+		if not keywordCounts[keyword] then
 			-- 检查是否已经有50个关键词
 			local count = 0
-			for _ in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+			for _ in pairs(keywordCounts) do
 				count = count + 1
+				if count >= 50 then 
+					break 
+				end
 			end
 			
+			-- 如果已满，删除最少使用的
 			if count >= 50 then
-				-- 找出最少的关键词并删除
-				local minKw, minCount = nil, math.huge
-				for k, c in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+				local minKw, minCount = nil, math_huge
+				for k, c in pairs(keywordCounts) do
 					if c < minCount then
 						minKw, minCount = k, c
 					end
 				end
 				if minKw then
-					KeywordMonitorDB.Statistics.KeywordCounts[minKw] = nil
+					keywordCounts[minKw] = nil
 				end
 			end
 			
-			KeywordMonitorDB.Statistics.KeywordCounts[keyword] = 0
+			keywordCounts[keyword] = 0
 		end
-		KeywordMonitorDB.Statistics.KeywordCounts[keyword] = KeywordMonitorDB.Statistics.KeywordCounts[keyword] + 1
-		tinsert(matchedKeywords, keyword)
-	elseif type(keyword) == "table" then
-		-- 组合关键词，记录每个子关键词
-		for _, subKey in ipairs(keyword) do
+		keywordCounts[keyword] = keywordCounts[keyword] + 1
+	end
+	
+	-- 处理组合关键词
+	if type(keyword) == "table" then
+		for i = 1, #keyword do
+			local subKey = keyword[i]
 			if sub(subKey, 1, 1) ~= "&" then
-				if not KeywordMonitorDB.Statistics.KeywordCounts[subKey] then
+				if not keywordCounts[subKey] then
 					local count = 0
-					for _ in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+					for _ in pairs(keywordCounts) do
 						count = count + 1
+						if count >= 50 then 
+							break 
+						end
 					end
 					
 					if count >= 50 then
-						local minKw, minCount = nil, math.huge
-						for k, c in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+						local minKw, minCount = nil, math_huge
+						for k, c in pairs(keywordCounts) do
 							if c < minCount then
 								minKw, minCount = k, c
 							end
 						end
 						if minKw then
-							KeywordMonitorDB.Statistics.KeywordCounts[minKw] = nil
+							keywordCounts[minKw] = nil
 						end
 					end
 					
-					KeywordMonitorDB.Statistics.KeywordCounts[subKey] = 0
+					keywordCounts[subKey] = 0
 				end
-				KeywordMonitorDB.Statistics.KeywordCounts[subKey] = KeywordMonitorDB.Statistics.KeywordCounts[subKey] + 1
-				tinsert(matchedKeywords, subKey)
+				keywordCounts[subKey] = keywordCounts[subKey] + 1
 			end
 		end
 	end
 	
 	-- 记录小时统计
-	local hour = tonumber(date("%H", time))
-	if not KeywordMonitorDB.Statistics.HourCounts[hour] then
-		KeywordMonitorDB.Statistics.HourCounts[hour] = 0
+	local hour = tonumber(date("%H", timestamp))
+	local hourCounts = KeywordMonitorDB.Statistics.HourCounts
+	if not hourCounts[hour] then
+		hourCounts[hour] = 0
 	end
-	KeywordMonitorDB.Statistics.HourCounts[hour] = KeywordMonitorDB.Statistics.HourCounts[hour] + 1
+	hourCounts[hour] = hourCounts[hour] + 1
 	
 	-- 注释掉趋势数据和关联分析，减少内存占用
 	-- KM:UpdateTrendData(matchedKeywords, time)
@@ -2846,11 +2885,11 @@ end
 
 -- 更新趋势数据（优化版 - 减少频繁操作）
 local lastTrendCleanup = 0
-function KM:UpdateTrendData(keywords, time)
+function KM:UpdateTrendData(keywords, timestamp)
 	EnsureConfig()
 	
-	local dateStr = date("%Y-%m-%d", time)
-	local hourStr = date("%Y-%m-%d-%H", time)
+	local dateStr = date("%Y-%m-%d", timestamp)
+	local hourStr = date("%Y-%m-%d-%H", timestamp)
 	
 	-- 更新每日数据
 	if not KeywordMonitorDB.TrendData.Daily[dateStr] then
@@ -2936,7 +2975,7 @@ function KM:UpdateTrendData(keywords, time)
 		for hourKey, _ in pairs(KeywordMonitorDB.TrendData.Hourly) do
 			local year, month, day, hour = hourKey:match("(%d+)-(%d+)-(%d+)-(%d+)")
 			if year and month and day and hour then
-				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = tonumber(hour), min = 0, sec = 0})
+				local dataTime = time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = tonumber(hour), min = 0, sec = 0})
 				if serverTime - dataTime > 48 * 3600 then
 					KeywordMonitorDB.TrendData.Hourly[hourKey] = nil
 				end
@@ -2947,7 +2986,7 @@ function KM:UpdateTrendData(keywords, time)
 		for dateKey, _ in pairs(KeywordMonitorDB.TrendData.Daily) do
 			local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
 			if year and month and day then
-				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+				local dataTime = time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
 				if serverTime - dataTime > 30 * 86400 then
 					KeywordMonitorDB.TrendData.Daily[dateKey] = nil
 				end
@@ -2958,7 +2997,7 @@ function KM:UpdateTrendData(keywords, time)
 		for dateKey, data in pairs(KeywordMonitorDB.TrendData.Daily) do
 			local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
 			if year and month and day then
-				local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+				local dataTime = time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
 				if serverTime - dataTime > 7 * 86400 and serverTime - dataTime <= 30 * 86400 then
 					-- 只保留总数
 					data.keywords = {}
@@ -4985,9 +5024,9 @@ function KM:Init()
 			CleanRepeatMessageCache()
 		end)
 		
-		-- 每30秒强制垃圾回收（激进的内存管理）
-		C_Timer.NewTicker(30, function()
-			collectgarbage("collect")
+		-- 每60秒执行一次轻量级垃圾回收（而不是30秒）
+		C_Timer.NewTicker(60, function()
+			collectgarbage("step", 100)  -- 增量式GC，不会造成卡顿
 		end)
 	end)
 	
