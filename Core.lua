@@ -81,6 +81,14 @@ local defaultConfig = {
 		"什么价格？",
 		"还在吗？",
 	},
+	-- 统计数据
+	Statistics = {
+		TodayMatches = 0,           -- 今日匹配次数
+		LastResetDate = "",         -- 上次重置日期
+		KeywordCounts = {},         -- 关键词匹配次数 {["关键词"] = 次数}
+		HourCounts = {},            -- 每小时匹配次数 {[0-23] = 次数}
+		TotalMatches = 0,           -- 总匹配次数
+	},
 }
 
 -- 初始化配置
@@ -129,6 +137,32 @@ local function EnsureConfig()
 	end
 	if not KeywordMonitorDB.HistoryMaxCount then
 		KeywordMonitorDB.HistoryMaxCount = 100
+	end
+	if not KeywordMonitorDB.Statistics then
+		KeywordMonitorDB.Statistics = {
+			TodayMatches = 0,
+			LastResetDate = date("%Y-%m-%d", GetServerTime()),
+			KeywordCounts = {},
+			HourCounts = {},
+			TotalMatches = 0,
+		}
+	end
+	
+	-- 检查是否需要重置今日统计
+	local currentDate = date("%Y-%m-%d", GetServerTime())
+	if KeywordMonitorDB.Statistics.LastResetDate ~= currentDate then
+		KeywordMonitorDB.Statistics.TodayMatches = 0
+		KeywordMonitorDB.Statistics.LastResetDate = currentDate
+	end
+	
+	-- 初始化小时统计
+	if not KeywordMonitorDB.Statistics.HourCounts then
+		KeywordMonitorDB.Statistics.HourCounts = {}
+	end
+	for i = 0, 23 do
+		if not KeywordMonitorDB.Statistics.HourCounts[i] then
+			KeywordMonitorDB.Statistics.HourCounts[i] = 0
+		end
 	end
 end
 
@@ -681,6 +715,9 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 		r = r, g = g, b = b,
 	})
 	
+	-- 更新统计数据
+	KM:UpdateStatistics(keyword, time)
+	
 	if KeywordMonitorDB.AudioEnabled then
 		PlaySoundFile("Interface\\AddOns\\KeywordMonitor\\Audio\\FollowMsg_1.ogg", "Master")
 	end
@@ -1131,9 +1168,16 @@ local function CreateConfigFrame()
 		KM:ShowQuickReplyUI()
 	end)
 	
+	-- 统计数据按钮
+	local statsBtn = CreateButton(frame, 120, 25, "统计数据")
+	statsBtn:SetPoint("TOPLEFT", 20, -350)
+	statsBtn:SetScript("OnClick", function()
+		KM:ShowStatisticsUI()
+	end)
+	
 	-- NDui 美化开关（始终可用）
 	local nduiCheck = CreateCheckBox(frame)
-	nduiCheck:SetPoint("TOPLEFT", 20, -355)
+	nduiCheck:SetPoint("TOPLEFT", 20, -385)
 	nduiCheck:SetChecked(KeywordMonitorDB.UseNDuiStyle)
 	local nduiLabel = CreateFS(frame, 13, "使用 NDui 美化风格", false, "LEFT")
 	nduiLabel:SetPoint("LEFT", nduiCheck, "RIGHT", 5, 0)
@@ -1151,10 +1195,10 @@ local function CreateConfigFrame()
 	end)
 	
 	local outputLabel = CreateFS(frame, 14, "输出方式:", false, "LEFT")
-	outputLabel:SetPoint("TOPLEFT", 20, -385)
+	outputLabel:SetPoint("TOPLEFT", 20, -415)
 	
 	local systemRadio = CreateCheckBox(frame)
-	systemRadio:SetPoint("TOPLEFT", 40, -410)
+	systemRadio:SetPoint("TOPLEFT", 40, -440)
 	systemRadio:SetChecked(KeywordMonitorDB.OutputMode == 1)
 	local systemLabel = CreateFS(frame, 13, "系统聊天窗口", false, "LEFT")
 	systemLabel:SetPoint("LEFT", systemRadio, "RIGHT", 5, 0)
@@ -1166,7 +1210,7 @@ local function CreateConfigFrame()
 	independentLabel:SetPoint("LEFT", independentRadio, "RIGHT", 5, 0)
 	
 	local chatFrameLabel = CreateFS(frame, 13, "输出到聊天窗口", false, "LEFT")
-	chatFrameLabel:SetPoint("TOPLEFT", 60, -440)
+	chatFrameLabel:SetPoint("TOPLEFT", 60, -470)
 	
 	local chatFrameDropdown = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 	chatFrameDropdown:SetSize(150, 30)
@@ -2324,6 +2368,355 @@ function KM:ShowQuickReplyForPlayer(playerName)
 			menu:Hide()
 		end
 	end)
+end
+
+-- 更新统计数据
+function KM:UpdateStatistics(keyword, time)
+	EnsureConfig()
+	
+	-- 增加今日匹配次数
+	KeywordMonitorDB.Statistics.TodayMatches = KeywordMonitorDB.Statistics.TodayMatches + 1
+	
+	-- 增加总匹配次数
+	KeywordMonitorDB.Statistics.TotalMatches = KeywordMonitorDB.Statistics.TotalMatches + 1
+	
+	-- 记录关键词匹配次数
+	if type(keyword) == "string" then
+		if not KeywordMonitorDB.Statistics.KeywordCounts[keyword] then
+			KeywordMonitorDB.Statistics.KeywordCounts[keyword] = 0
+		end
+		KeywordMonitorDB.Statistics.KeywordCounts[keyword] = KeywordMonitorDB.Statistics.KeywordCounts[keyword] + 1
+	elseif type(keyword) == "table" then
+		-- 组合关键词，记录每个子关键词
+		for _, subKey in ipairs(keyword) do
+			if sub(subKey, 1, 1) ~= "&" then
+				if not KeywordMonitorDB.Statistics.KeywordCounts[subKey] then
+					KeywordMonitorDB.Statistics.KeywordCounts[subKey] = 0
+				end
+				KeywordMonitorDB.Statistics.KeywordCounts[subKey] = KeywordMonitorDB.Statistics.KeywordCounts[subKey] + 1
+			end
+		end
+	end
+	
+	-- 记录小时统计
+	local hour = tonumber(date("%H", time))
+	if not KeywordMonitorDB.Statistics.HourCounts[hour] then
+		KeywordMonitorDB.Statistics.HourCounts[hour] = 0
+	end
+	KeywordMonitorDB.Statistics.HourCounts[hour] = KeywordMonitorDB.Statistics.HourCounts[hour] + 1
+end
+
+-- 获取统计数据
+function KM:GetStatistics()
+	EnsureConfig()
+	return KeywordMonitorDB.Statistics
+end
+
+-- 重置统计数据
+function KM:ResetStatistics()
+	EnsureConfig()
+	KeywordMonitorDB.Statistics = {
+		TodayMatches = 0,
+		LastResetDate = date("%Y-%m-%d", GetServerTime()),
+		KeywordCounts = {},
+		HourCounts = {},
+		TotalMatches = 0,
+	}
+	for i = 0, 23 do
+		KeywordMonitorDB.Statistics.HourCounts[i] = 0
+	end
+	print("|cff00FF00[ChatKeyword]|r 统计数据已重置")
+end
+
+-- 获取最常匹配的关键词（前N个）
+function KM:GetTopKeywords(count)
+	EnsureConfig()
+	count = count or 10
+	
+	local list = {}
+	for keyword, matchCount in pairs(KeywordMonitorDB.Statistics.KeywordCounts) do
+		tinsert(list, {keyword = keyword, count = matchCount})
+	end
+	
+	-- 按匹配次数排序
+	table.sort(list, function(a, b) return a.count > b.count end)
+	
+	-- 返回前N个
+	local result = {}
+	for i = 1, math.min(count, #list) do
+		tinsert(result, list[i])
+	end
+	
+	return result
+end
+
+-- 获取最活跃的时间段（前N个）
+function KM:GetTopHours(count)
+	EnsureConfig()
+	count = count or 5
+	
+	local list = {}
+	for hour = 0, 23 do
+		local matchCount = KeywordMonitorDB.Statistics.HourCounts[hour] or 0
+		tinsert(list, {hour = hour, count = matchCount})
+	end
+	
+	-- 按匹配次数排序
+	table.sort(list, function(a, b) return a.count > b.count end)
+	
+	-- 返回前N个
+	local result = {}
+	for i = 1, math.min(count, #list) do
+		tinsert(result, list[i])
+	end
+	
+	return result
+end
+
+-- 显示统计界面
+function KM:ShowStatisticsUI()
+	EnsureConfig()
+	
+	if not self.statisticsFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_StatisticsUI", UIParent, "BackdropTemplate")
+		frame:SetSize(600, 500)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("DIALOG")
+		frame:SetFrameLevel(100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.9)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "统计数据", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateButton(frame, 20, 20, "X")
+		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 今日匹配次数
+		local todayLabel = CreateFS(frame, 14, "今日匹配次数:", false, "LEFT")
+		todayLabel:SetPoint("TOPLEFT", 20, -50)
+		todayLabel:SetTextColor(1, 0.8, 0)
+		
+		local todayValue = CreateFS(frame, 20, "0", true, "LEFT")
+		todayValue:SetPoint("LEFT", todayLabel, "RIGHT", 10, 0)
+		todayValue:SetTextColor(0, 1, 0)
+		frame.todayValue = todayValue
+		
+		-- 总匹配次数
+		local totalLabel = CreateFS(frame, 12, "总匹配次数:", false, "LEFT")
+		totalLabel:SetPoint("TOPLEFT", 20, -80)
+		totalLabel:SetTextColor(0.7, 0.7, 0.7)
+		
+		local totalValue = CreateFS(frame, 14, "0", false, "LEFT")
+		totalValue:SetPoint("LEFT", totalLabel, "RIGHT", 10, 0)
+		totalValue:SetTextColor(0.5, 0.8, 1)
+		frame.totalValue = totalValue
+		
+		-- 最常匹配的关键词
+		local topKeywordsLabel = CreateFS(frame, 14, "最常匹配的关键词 (Top 10):", false, "LEFT")
+		topKeywordsLabel:SetPoint("TOPLEFT", 20, -110)
+		topKeywordsLabel:SetTextColor(1, 0.8, 0)
+		
+		local keywordsScrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		keywordsScrollFrame:SetPoint("TOPLEFT", 20, -135)
+		keywordsScrollFrame:SetSize(260, 180)
+		
+		local keywordsScrollChild = CreateFrame("Frame", nil, keywordsScrollFrame)
+		keywordsScrollChild:SetSize(240, 1)
+		keywordsScrollFrame:SetScrollChild(keywordsScrollChild)
+		frame.keywordsScrollChild = keywordsScrollChild
+		
+		-- 最活跃的时间段
+		local topHoursLabel = CreateFS(frame, 14, "最活跃的时间段 (Top 10):", false, "LEFT")
+		topHoursLabel:SetPoint("TOPLEFT", 310, -110)
+		topHoursLabel:SetTextColor(1, 0.8, 0)
+		
+		local hoursScrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		hoursScrollFrame:SetPoint("TOPLEFT", 310, -135)
+		hoursScrollFrame:SetSize(260, 180)
+		
+		local hoursScrollChild = CreateFrame("Frame", nil, hoursScrollFrame)
+		hoursScrollChild:SetSize(240, 1)
+		hoursScrollFrame:SetScrollChild(hoursScrollChild)
+		frame.hoursScrollChild = hoursScrollChild
+		
+		-- 时间段分布图（简单的文本条形图）
+		local chartLabel = CreateFS(frame, 14, "24小时分布图:", false, "LEFT")
+		chartLabel:SetPoint("TOPLEFT", 20, -330)
+		chartLabel:SetTextColor(1, 0.8, 0)
+		
+		local chartFrame = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+		chartFrame:SetPoint("TOPLEFT", 20, -355)
+		chartFrame:SetSize(560, 100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			chartFrame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			chartFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.8)
+			chartFrame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			chartFrame:SetBackdrop({
+				bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+				edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+				tile = true,
+				tileSize = 16,
+				edgeSize = 12,
+				insets = { left = 2, right = 2, top = 2, bottom = 2 }
+			})
+			chartFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.8)
+		end
+		
+		frame.chartFrame = chartFrame
+		frame.chartBars = {}
+		
+		-- 创建24个柱状图
+		for i = 0, 23 do
+			local bar = CreateFrame("Frame", nil, chartFrame, "BackdropTemplate")
+			bar:SetSize(20, 1)
+			bar:SetPoint("BOTTOMLEFT", 10 + i * 23, 5)
+			bar:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+			})
+			bar:SetBackdropColor(0, 0.8, 0, 0.8)
+			
+			local hourLabel = CreateFS(bar, 9, tostring(i), false, "CENTER")
+			hourLabel:SetPoint("BOTTOM", bar, "TOP", 0, 2)
+			hourLabel:SetTextColor(0.7, 0.7, 0.7)
+			
+			bar.hourLabel = hourLabel
+			frame.chartBars[i] = bar
+		end
+		
+		-- 重置按钮
+		local resetBtn = CreateButton(frame, 100, 25, "重置统计")
+		resetBtn:SetPoint("BOTTOM", 0, 15)
+		resetBtn:SetScript("OnClick", function()
+			KM:ResetStatistics()
+			KM:RefreshStatistics()
+		end)
+		
+		-- 刷新统计数据
+		function KM:RefreshStatistics()
+			local stats = KM:GetStatistics()
+			
+			-- 更新今日和总匹配次数
+			frame.todayValue:SetText(tostring(stats.TodayMatches))
+			frame.totalValue:SetText(tostring(stats.TotalMatches))
+			
+			-- 更新最常匹配的关键词
+			if frame.keywordsScrollChild.items then
+				for _, item in ipairs(frame.keywordsScrollChild.items) do
+					item:Hide()
+					item:SetParent(nil)
+				end
+			end
+			frame.keywordsScrollChild.items = {}
+			
+			local topKeywords = KM:GetTopKeywords(10)
+			local yOffset = -5
+			for i, data in ipairs(topKeywords) do
+				local item = CreateFS(frame.keywordsScrollChild, 11, 
+					string.format("%d. %s (%d次)", i, data.keyword, data.count), 
+					false, "LEFT")
+				item:SetPoint("TOPLEFT", 5, yOffset)
+				item:SetTextColor(0.9, 0.9, 0.9)
+				tinsert(frame.keywordsScrollChild.items, item)
+				yOffset = yOffset - 18
+			end
+			frame.keywordsScrollChild:SetHeight(math.max(1, -yOffset))
+			
+			-- 更新最活跃的时间段
+			if frame.hoursScrollChild.items then
+				for _, item in ipairs(frame.hoursScrollChild.items) do
+					item:Hide()
+					item:SetParent(nil)
+				end
+			end
+			frame.hoursScrollChild.items = {}
+			
+			local topHours = KM:GetTopHours(10)
+			yOffset = -5
+			for i, data in ipairs(topHours) do
+				local item = CreateFS(frame.hoursScrollChild, 11, 
+					string.format("%d. %02d:00-%02d:59 (%d次)", i, data.hour, data.hour, data.count), 
+					false, "LEFT")
+				item:SetPoint("TOPLEFT", 5, yOffset)
+				item:SetTextColor(0.9, 0.9, 0.9)
+				tinsert(frame.hoursScrollChild.items, item)
+				yOffset = yOffset - 18
+			end
+			frame.hoursScrollChild:SetHeight(math.max(1, -yOffset))
+			
+			-- 更新24小时分布图
+			local maxCount = 0
+			for hour = 0, 23 do
+				local count = stats.HourCounts[hour] or 0
+				if count > maxCount then
+					maxCount = count
+				end
+			end
+			
+			for hour = 0, 23 do
+				local count = stats.HourCounts[hour] or 0
+				local bar = frame.chartBars[hour]
+				if bar then
+					local height = maxCount > 0 and (count / maxCount * 70) or 1
+					bar:SetHeight(math.max(1, height))
+					
+					-- 根据匹配次数设置颜色
+					if count == 0 then
+						bar:SetBackdropColor(0.2, 0.2, 0.2, 0.5)
+					elseif count < maxCount * 0.3 then
+						bar:SetBackdropColor(0, 0.5, 0, 0.8)
+					elseif count < maxCount * 0.7 then
+						bar:SetBackdropColor(0.8, 0.8, 0, 0.8)
+					else
+						bar:SetBackdropColor(0.8, 0, 0, 0.8)
+					end
+				end
+			end
+		end
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshStatistics()
+		end)
+		
+		self.statisticsFrame = frame
+	end
+	
+	if self.statisticsFrame:IsShown() then
+		self.statisticsFrame:Hide()
+	else
+		self.statisticsFrame:Show()
+	end
 end
 
 -- 初始化
