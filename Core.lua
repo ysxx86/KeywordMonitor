@@ -89,6 +89,15 @@ local defaultConfig = {
 		HourCounts = {},            -- 每小时匹配次数 {[0-23] = 次数}
 		TotalMatches = 0,           -- 总匹配次数
 	},
+	-- 智能学习
+	SmartLearning = {
+		Enabled = true,             -- 是否启用智能学习
+		WordFrequency = {},         -- 词频统计 {["词汇"] = 次数}
+		LastSuggestionTime = 0,     -- 上次建议时间
+		SuggestionInterval = 3600,  -- 建议间隔（秒，默认1小时）
+		MinFrequency = 5,           -- 最小出现次数才建议
+		IgnoredWords = {},          -- 已忽略的建议词 {["词汇"] = true}
+	},
 }
 
 -- 初始化配置
@@ -163,6 +172,18 @@ local function EnsureConfig()
 		if not KeywordMonitorDB.Statistics.HourCounts[i] then
 			KeywordMonitorDB.Statistics.HourCounts[i] = 0
 		end
+	end
+	
+	-- 初始化智能学习
+	if not KeywordMonitorDB.SmartLearning then
+		KeywordMonitorDB.SmartLearning = {
+			Enabled = true,
+			WordFrequency = {},
+			LastSuggestionTime = 0,
+			SuggestionInterval = 3600,
+			MinFrequency = 5,
+			IgnoredWords = {},
+		}
 	end
 end
 
@@ -718,6 +739,9 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 	-- 更新统计数据
 	KM:UpdateStatistics(keyword, time)
 	
+	-- 智能学习（分析消息中的高频词）
+	KM:LearnFromMessage(msg)
+	
 	if KeywordMonitorDB.AudioEnabled then
 		PlaySoundFile("Interface\\AddOns\\KeywordMonitor\\Audio\\FollowMsg_1.ogg", "Master")
 	end
@@ -818,7 +842,7 @@ local function CreateConfigFrame()
 	EnsureConfig()
 	
 	local frame = CreateFrame("Frame", "KeywordMonitor_Config", UIParent, "BackdropTemplate")
-	frame:SetSize(500, 550)
+	frame:SetSize(500, 600)
 	frame:SetPoint("CENTER")
 	frame:SetFrameStrata("DIALOG")
 	
@@ -1175,6 +1199,13 @@ local function CreateConfigFrame()
 		KM:ShowStatisticsUI()
 	end)
 	
+	-- 智能建议按钮
+	local smartBtn = CreateButton(frame, 120, 25, "智能建议")
+	smartBtn:SetPoint("LEFT", statsBtn, "RIGHT", 10, 0)
+	smartBtn:SetScript("OnClick", function()
+		KM:ShowSmartSuggestionsUI()
+	end)
+	
 	-- NDui 美化开关（始终可用）
 	local nduiCheck = CreateCheckBox(frame)
 	nduiCheck:SetPoint("TOPLEFT", 20, -385)
@@ -1204,13 +1235,13 @@ local function CreateConfigFrame()
 	systemLabel:SetPoint("LEFT", systemRadio, "RIGHT", 5, 0)
 	
 	local independentRadio = CreateCheckBox(frame)
-	independentRadio:SetPoint("LEFT", systemLabel, "RIGHT", 30, 0)
+	independentRadio:SetPoint("TOPLEFT", 40, -465)
 	independentRadio:SetChecked(KeywordMonitorDB.OutputMode == 2)
 	local independentLabel = CreateFS(frame, 13, "独立聊天窗口", false, "LEFT")
 	independentLabel:SetPoint("LEFT", independentRadio, "RIGHT", 5, 0)
 	
 	local chatFrameLabel = CreateFS(frame, 13, "输出到聊天窗口", false, "LEFT")
-	chatFrameLabel:SetPoint("TOPLEFT", 60, -470)
+	chatFrameLabel:SetPoint("TOPLEFT", 60, -495)
 	
 	local chatFrameDropdown = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 	chatFrameDropdown:SetSize(150, 30)
@@ -1353,7 +1384,7 @@ local function CreateConfigFrame()
 	end)
 	
 	local flashCheck = CreateCheckBox(frame)
-	flashCheck:SetPoint("TOPLEFT", 60, -440)
+	flashCheck:SetPoint("TOPLEFT", 60, -525)
 	flashCheck:SetChecked(KeywordMonitorDB.FlashOnMatch)
 	local flashLabel = CreateFS(frame, 13, "提取成功窗口标签闪动", false, "LEFT")
 	flashLabel:SetPoint("LEFT", flashCheck, "RIGHT", 5, 0)
@@ -1364,7 +1395,7 @@ local function CreateConfigFrame()
 	end)
 	
 	local combatHideCheck = CreateCheckBox(frame)
-	combatHideCheck:SetPoint("TOPLEFT", 60, -470)
+	combatHideCheck:SetPoint("TOPLEFT", 60, -550)
 	combatHideCheck:SetChecked(KeywordMonitorDB.CombatHide)
 	local combatHideLabel = CreateFS(frame, 13, "战斗中隐藏独立窗口", false, "LEFT")
 	combatHideLabel:SetPoint("LEFT", combatHideCheck, "RIGHT", 5, 0)
@@ -2428,6 +2459,164 @@ function KM:ResetStatistics()
 	print("|cff00FF00[ChatKeyword]|r 统计数据已重置")
 end
 
+-- 从消息中学习（提取高频词汇）
+function KM:LearnFromMessage(msg)
+	EnsureConfig()
+	
+	if not KeywordMonitorDB.SmartLearning.Enabled then
+		return
+	end
+	
+	-- 清理消息文本
+	local cleanMsg = CleanText(msg)
+	
+	-- 提取2-4个字符的词汇（中文通常是2-4个字）
+	for i = 1, #cleanMsg do
+		-- 提取2字词
+		if i + 1 <= #cleanMsg then
+			local word = sub(cleanMsg, i, i + 1)
+			if #word >= 2 then
+				KM:RecordWord(word)
+			end
+		end
+		
+		-- 提取3字词
+		if i + 2 <= #cleanMsg then
+			local word = sub(cleanMsg, i, i + 2)
+			if #word >= 3 then
+				KM:RecordWord(word)
+			end
+		end
+		
+		-- 提取4字词
+		if i + 3 <= #cleanMsg then
+			local word = sub(cleanMsg, i, i + 3)
+			if #word >= 4 then
+				KM:RecordWord(word)
+			end
+		end
+	end
+	
+	-- 检查是否需要显示建议
+	KM:CheckAndShowSuggestions()
+end
+
+-- 记录词汇频率
+function KM:RecordWord(word)
+	EnsureConfig()
+	
+	-- 过滤已存在的关键词
+	for _, kw in ipairs(keywords) do
+		if type(kw) == "string" and find(upper(word), kw, 1, true) then
+			return
+		end
+	end
+	
+	-- 过滤已忽略的词
+	if KeywordMonitorDB.SmartLearning.IgnoredWords[word] then
+		return
+	end
+	
+	-- 记录词频
+	if not KeywordMonitorDB.SmartLearning.WordFrequency[word] then
+		KeywordMonitorDB.SmartLearning.WordFrequency[word] = 0
+	end
+	KeywordMonitorDB.SmartLearning.WordFrequency[word] = KeywordMonitorDB.SmartLearning.WordFrequency[word] + 1
+end
+
+-- 检查并显示建议
+function KM:CheckAndShowSuggestions()
+	EnsureConfig()
+	
+	local currentTime = GetTime()
+	local lastTime = KeywordMonitorDB.SmartLearning.LastSuggestionTime or 0
+	local interval = KeywordMonitorDB.SmartLearning.SuggestionInterval or 3600
+	
+	-- 检查是否到了建议时间
+	if currentTime - lastTime < interval then
+		return
+	end
+	
+	-- 获取高频词汇
+	local suggestions = KM:GetSmartSuggestions()
+	
+	if #suggestions > 0 then
+		-- 更新建议时间
+		KeywordMonitorDB.SmartLearning.LastSuggestionTime = currentTime
+		
+		-- 显示提示
+		local wordList = {}
+		for i = 1, math.min(3, #suggestions) do
+			tinsert(wordList, suggestions[i].word)
+		end
+		
+		print("|cff00FF00[ChatKeyword 智能建议]|r 您近期频繁关注 |cffFFFF00" .. table.concat(wordList, "、") .. "|r，是否将其设为关键词？")
+		print("|cff00FF00[ChatKeyword]|r 打开配置界面，点击 |cffFFFF00智能建议|r 按钮查看更多")
+	end
+end
+
+-- 获取智能建议（高频词汇）
+function KM:GetSmartSuggestions()
+	EnsureConfig()
+	
+	local minFreq = KeywordMonitorDB.SmartLearning.MinFrequency or 5
+	local suggestions = {}
+	
+	for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
+		if count >= minFreq then
+			tinsert(suggestions, {word = word, count = count})
+		end
+	end
+	
+	-- 按频率排序
+	table.sort(suggestions, function(a, b) return a.count > b.count end)
+	
+	return suggestions
+end
+
+-- 添加建议词为关键词
+function KM:AddSuggestedKeyword(word)
+	EnsureConfig()
+	
+	-- 添加到关键词
+	local currentKeywords = KeywordMonitorDB.Keywords or ""
+	if currentKeywords == "" then
+		KeywordMonitorDB.Keywords = word
+	else
+		KeywordMonitorDB.Keywords = currentKeywords .. "," .. word
+	end
+	
+	-- 更新关键词列表
+	KM:UpdateKeywordList(KeywordMonitorDB.Keywords)
+	
+	-- 从学习数据中移除
+	KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
+	
+	print("|cff00FF00[ChatKeyword]|r 已添加关键词: " .. word)
+end
+
+-- 忽略建议词
+function KM:IgnoreSuggestedKeyword(word)
+	EnsureConfig()
+	
+	-- 添加到忽略列表
+	KeywordMonitorDB.SmartLearning.IgnoredWords[word] = true
+	
+	-- 从学习数据中移除
+	KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
+	
+	print("|cff00FF00[ChatKeyword]|r 已忽略建议: " .. word)
+end
+
+-- 清空学习数据
+function KM:ClearLearningData()
+	EnsureConfig()
+	KeywordMonitorDB.SmartLearning.WordFrequency = {}
+	KeywordMonitorDB.SmartLearning.IgnoredWords = {}
+	KeywordMonitorDB.SmartLearning.LastSuggestionTime = 0
+	print("|cff00FF00[ChatKeyword]|r 学习数据已清空")
+end
+
 -- 获取最常匹配的关键词（前N个）
 function KM:GetTopKeywords(count)
 	EnsureConfig()
@@ -2716,6 +2905,194 @@ function KM:ShowStatisticsUI()
 		self.statisticsFrame:Hide()
 	else
 		self.statisticsFrame:Show()
+	end
+end
+
+-- 显示智能建议界面
+function KM:ShowSmartSuggestionsUI()
+	EnsureConfig()
+	
+	if not self.suggestionsFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_SuggestionsUI", UIParent, "BackdropTemplate")
+		frame:SetSize(500, 450)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("DIALOG")
+		frame:SetFrameLevel(100)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.9)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "智能建议 - 高频词汇", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateButton(frame, 20, 20, "X")
+		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 说明文字
+		local desc = CreateFS(frame, 11, "插件自动学习您关注的消息中的高频词汇，建议添加为关键词", false, "LEFT")
+		desc:SetPoint("TOPLEFT", 20, -40)
+		desc:SetTextColor(0.7, 0.7, 0.7)
+		
+		-- 启用智能学习开关
+		local enableCheck = CreateCheckBox(frame)
+		enableCheck:SetPoint("TOPLEFT", 20, -65)
+		enableCheck:SetChecked(KeywordMonitorDB.SmartLearning.Enabled)
+		local enableLabel = CreateFS(frame, 12, "启用智能学习", false, "LEFT")
+		enableLabel:SetPoint("LEFT", enableCheck, "RIGHT", 5, 0)
+		
+		enableCheck:SetScript("OnClick", function(self)
+			KeywordMonitorDB.SmartLearning.Enabled = self:GetChecked()
+			print("|cff00FF00[ChatKeyword]|r 智能学习: " .. (KeywordMonitorDB.SmartLearning.Enabled and "|cff00FF00已启用|r" or "|cffFF0000已禁用|r"))
+		end)
+		
+		-- 建议列表
+		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -95)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 50)
+		
+		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+		scrollChild:SetSize(440, 1)
+		scrollFrame:SetScrollChild(scrollChild)
+		frame.scrollChild = scrollChild
+		
+		-- 刷新建议列表
+		function KM:RefreshSuggestions()
+			if scrollChild.items then
+				for _, item in ipairs(scrollChild.items) do
+					item:Hide()
+					item:SetParent(nil)
+				end
+			end
+			scrollChild.items = {}
+			
+			local suggestions = KM:GetSmartSuggestions()
+			
+			if #suggestions == 0 then
+				local noData = CreateFS(scrollChild, 12, "暂无建议数据，继续使用插件后会自动学习", false, "CENTER")
+				noData:SetPoint("TOP", 0, -50)
+				noData:SetTextColor(0.7, 0.7, 0.7)
+				tinsert(scrollChild.items, noData)
+				scrollChild:SetHeight(1)
+				return
+			end
+			
+			local yOffset = -5
+			for i, data in ipairs(suggestions) do
+				local itemFrame = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
+				itemFrame:SetSize(420, 35)
+				itemFrame:SetPoint("TOPLEFT", 10, yOffset)
+				
+				if KeywordMonitorDB.UseNDuiStyle then
+					itemFrame:SetBackdrop({
+						bgFile = "Interface\\Buttons\\WHITE8X8",
+						edgeFile = "Interface\\Buttons\\WHITE8X8",
+						edgeSize = 1,
+					})
+					itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+					itemFrame:SetBackdropBorderColor(0, 0, 0, 1)
+				else
+					itemFrame:SetBackdrop({
+						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+						tile = true,
+						tileSize = 16,
+						edgeSize = 12,
+						insets = { left = 2, right = 2, top = 2, bottom = 2 }
+					})
+					itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+				end
+				
+				-- 词汇和频率
+				local wordText = CreateFS(itemFrame, 13, data.word, true, "LEFT")
+				wordText:SetPoint("LEFT", 10, 0)
+				wordText:SetTextColor(1, 0.8, 0)
+				
+				local countText = CreateFS(itemFrame, 11, string.format("(出现%d次)", data.count), false, "LEFT")
+				countText:SetPoint("LEFT", wordText, "RIGHT", 10, 0)
+				countText:SetTextColor(0.7, 0.7, 0.7)
+				
+				-- 添加按钮
+				local addBtn = CreateButton(itemFrame, 60, 25, "添加")
+				addBtn:SetPoint("RIGHT", -70, 0)
+				addBtn:SetScript("OnClick", function()
+					KM:AddSuggestedKeyword(data.word)
+					KM:RefreshSuggestions()
+				end)
+				
+				-- 忽略按钮
+				local ignoreBtn = CreateButton(itemFrame, 60, 25, "忽略")
+				ignoreBtn:SetPoint("RIGHT", -5, 0)
+				ignoreBtn:SetScript("OnClick", function()
+					KM:IgnoreSuggestedKeyword(data.word)
+					KM:RefreshSuggestions()
+				end)
+				
+				tinsert(scrollChild.items, itemFrame)
+				yOffset = yOffset - 40
+			end
+			
+			scrollChild:SetHeight(math.max(1, -yOffset))
+		end
+		
+		-- 清空学习数据按钮
+		local clearBtn = CreateButton(frame, 120, 25, "清空学习数据")
+		clearBtn:SetPoint("BOTTOMLEFT", 20, 15)
+		clearBtn:SetScript("OnClick", function()
+			KM:ClearLearningData()
+			KM:RefreshSuggestions()
+		end)
+		
+		-- 全部添加按钮
+		local addAllBtn = CreateButton(frame, 100, 25, "全部添加")
+		addAllBtn:SetPoint("BOTTOM", 0, 15)
+		addAllBtn:SetScript("OnClick", function()
+			local suggestions = KM:GetSmartSuggestions()
+			local count = 0
+			for _, data in ipairs(suggestions) do
+				KM:AddSuggestedKeyword(data.word)
+				count = count + 1
+			end
+			if count > 0 then
+				print("|cff00FF00[ChatKeyword]|r 已添加 " .. count .. " 个建议关键词")
+				KM:RefreshSuggestions()
+			end
+		end)
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshSuggestions()
+		end)
+		
+		self.suggestionsFrame = frame
+	end
+	
+	if self.suggestionsFrame:IsShown() then
+		self.suggestionsFrame:Hide()
+	else
+		self.suggestionsFrame:Show()
 	end
 end
 
