@@ -92,7 +92,8 @@ local defaultConfig = {
 	UseKeywordGroups = false,  -- 是否使用分组模式
 	-- 历史记录
 	History = {},  -- 最近的匹配消息
-	HistoryMaxCount = 50,  -- 最多保存50条（从100改为50）
+	HistoryMaxCount = 500,  -- 最多保存500条（3天的数据）
+	HistoryRetentionDays = 3,  -- 保留3天
 	-- 快速回复
 	QuickReplies = {
 		"有兴趣，密我",
@@ -245,6 +246,17 @@ local function EnsureConfig()
 	if not KeywordMonitorDB.DataRetentionDays then
 		KeywordMonitorDB.DataRetentionDays = 3  -- 从7改为3
 	end
+	
+	-- 初始化自定义停用词列表
+	if not KeywordMonitorDB.CustomStopWords then
+		KeywordMonitorDB.CustomStopWords = {}
+	end
+	
+	-- 初始化词汇替换映射表
+	if not KeywordMonitorDB.WordReplacements then
+		KeywordMonitorDB.WordReplacements = {}
+	end
+	
 	if not KeywordMonitorDB.LastVersion then
 		KeywordMonitorDB.LastVersion = ""
 	end
@@ -295,6 +307,21 @@ local function CreateButton(parent, width, height, text)
 	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
 	btn:SetSize(width, height)
 	btn:SetText(text or "")
+	return btn
+end
+
+-- 创建美观的关闭按钮
+local function CreateCloseButton(parent)
+	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+	btn:SetSize(28, 28)  -- 正方形，稍微大一点
+	btn:SetText("×")  -- 使用更美观的乘号符号
+	
+	-- 设置字体更大更清晰
+	local text = btn:GetFontString()
+	if text then
+		text:SetFont(STANDARD_TEXT_FONT, 18, "OUTLINE")
+	end
+	
 	return btn
 end
 
@@ -1028,6 +1055,9 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 		name = name,
 		msg = msg,
 		channelName = channelName,
+		r = r,  -- 保存职业颜色
+		g = g,
+		b = b,
 	})
 	
 	-- 更新统计数据
@@ -1179,8 +1209,8 @@ local function CreateConfigFrame()
 	versionText:SetPoint("TOPRIGHT", -25, -8)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
 	
-	local closeBtn = CreateButton(frame, 20, 20, "X")
-	closeBtn:SetPoint("TOPRIGHT", -5, -5)
+	local closeBtn = CreateCloseButton(frame)
+	closeBtn:SetPoint("TOPRIGHT", -10, -10)
 	closeBtn:SetScript("OnClick", function() frame:Hide() end)
 	
 	local enableCheck = CreateCheckBox(frame)
@@ -1893,7 +1923,17 @@ function KM:CreateKeywordButton()
 		-- 创建类似暴雪UI的按钮样式
 		bu = CreateFrame("Button", "KeywordMonitor_Button", UIParent, "BackdropTemplate")
 		bu:SetSize(28, 28)
-		bu:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", 0, 5)
+		
+		-- 默认位置：综合频道标签的上方
+		-- ChatFrame1Tab 是综合频道的标签
+		local chatTab = _G["ChatFrame1Tab"]
+		if chatTab then
+			bu:SetPoint("BOTTOM", chatTab, "TOP", 0, 5)
+		else
+			-- 如果找不到标签，使用聊天框左上角作为备用位置
+			bu:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", 0, 5)
+		end
+		
 		bu:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 		bu:SetMovable(true)
 		bu:SetClampedToScreen(true)
@@ -2034,21 +2074,86 @@ function KM:AddToHistory(record)
 		msg = sub(msg, 1, 100) .. "..."
 	end
 	
-	local simpleRecord = {
-		time = record.time,
-		timeStr = record.timeStr,
-		name = record.name,
-		msg = msg,  -- 限制长度
-		channelName = record.channelName,
-		-- 不保存完整的消息对象和其他冗余数据
-	}
+	-- 检查是否是重复消息（同一个人在60秒内发布的相同内容）
+	local currentTime = record.time
+	local isDuplicate = false
+	local duplicateIndex = nil
 	
-	-- 添加到历史记录开头
-	tinsert(KeywordMonitorDB.History, 1, simpleRecord)
+	for i, existingRecord in ipairs(KeywordMonitorDB.History) do
+		-- 检查是否是同一个人
+		if existingRecord.name == record.name then
+			-- 检查时间差是否在60秒内
+			if currentTime - existingRecord.time <= 60 then
+				-- 检查消息内容是否相似（去除空格和标点后比较）
+				local cleanExisting = gsub(existingRecord.msg, "[%p%s]", "")
+				local cleanNew = gsub(msg, "[%p%s]", "")
+				
+				if cleanExisting == cleanNew then
+					-- 找到重复消息
+					isDuplicate = true
+					duplicateIndex = i
+					break
+				end
+			end
+		end
+		
+		-- 只检查最近的10条记录，提高性能
+		if i >= 10 then break end
+	end
+	
+	if isDuplicate and duplicateIndex then
+		-- 合并频道信息
+		local existingRecord = KeywordMonitorDB.History[duplicateIndex]
+		
+		-- 检查频道是否已经存在
+		if not find(existingRecord.channelName, record.channelName, 1, true) then
+			existingRecord.channelName = existingRecord.channelName .. " " .. record.channelName
+		end
+		
+		-- 更新时间为最新的
+		existingRecord.time = currentTime
+		existingRecord.timeStr = record.timeStr
+		
+		-- 将这条记录移到最前面
+		tremove(KeywordMonitorDB.History, duplicateIndex)
+		tinsert(KeywordMonitorDB.History, 1, existingRecord)
+	else
+		-- 添加新记录
+		local currentDate = date("%Y-%m-%d", currentTime)
+		local simpleRecord = {
+			time = record.time,
+			date = currentDate,  -- 添加日期字段
+			timeStr = record.timeStr,
+			name = record.name,
+			msg = msg,  -- 限制长度
+			channelName = record.channelName,
+			r = record.r or 1,  -- 保存职业颜色
+			g = record.g or 1,
+			b = record.b or 1,
+		}
+		
+		-- 添加到历史记录开头
+		tinsert(KeywordMonitorDB.History, 1, simpleRecord)
+	end
+	
+	-- 清理超过3天的记录
+	local retentionDays = KeywordMonitorDB.HistoryRetentionDays or 3
+	local cutoffTime = currentTime - (retentionDays * 86400)
+	
+	for i = #KeywordMonitorDB.History, 1, -1 do
+		if KeywordMonitorDB.History[i].time < cutoffTime then
+			tremove(KeywordMonitorDB.History, i)
+		end
+	end
 	
 	-- 限制历史记录数量
 	while #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount do
 		tremove(KeywordMonitorDB.History)
+	end
+	
+	-- 如果历史记录界面已打开，实时刷新
+	if self.historyFrame and self.historyFrame:IsShown() then
+		self:RefreshHistoryList()
 	end
 end
 
@@ -2063,6 +2168,11 @@ function KM:ClearHistory()
 	EnsureConfig()
 	KeywordMonitorDB.History = {}
 	print("|cff00FF00[ChatKeyword]|r 历史记录已清空")
+	
+	-- 如果历史记录界面已打开，实时刷新
+	if self.historyFrame and self.historyFrame:IsShown() then
+		self:RefreshHistoryList()
+	end
 end
 
 -- 搜索历史记录
@@ -2226,8 +2336,8 @@ function KM:ShowKeywordGroupsUI()
 		local title = CreateFS(frame, 16, "关键词分组管理", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 使用分组模式开关
@@ -2382,7 +2492,7 @@ function KM:ShowKeywordGroupsUI()
 				
 				-- 删除按钮
 				local delBtn = CreateButton(groupFrame, 50, 20, "删除")
-				delBtn:SetPoint("TOPRIGHT", -5, -5)
+				delBtn:SetPoint("TOPRIGHT", -10, -10)
 				delBtn:SetScript("OnClick", function()
 					print("|cffFFFF00[Debug]|r 删除按钮被点击，索引: " .. currentIndex)
 					print("|cffFFFF00[Debug]|r 删除前分组数量: " .. #KeywordMonitorDB.KeywordGroups)
@@ -2476,14 +2586,69 @@ function KM:ShowHistoryUI()
 		
 		local title = CreateFS(frame, 16, "历史记录", true)
 		title:SetPoint("TOP", 0, -10)
+		frame.title = title  -- 保存标题引用，用于更新
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 日期筛选标签
+		frame.selectedDateFilter = "all"  -- 默认显示全部
+		
+		local dateFilterLabel = CreateFS(frame, 12, "日期筛选:", false, "LEFT")
+		dateFilterLabel:SetPoint("TOPLEFT", 20, -40)
+		
+		-- 创建日期筛选按钮
+		local dateFilters = {
+			{key = "today", label = "今天"},
+			{key = "yesterday", label = "昨天"},
+			{key = "recent3", label = "最近3天"},
+			{key = "all", label = "全部"}
+		}
+		
+		frame.dateFilterButtons = {}
+		local xOffset = 80
+		
+		for _, filter in ipairs(dateFilters) do
+			local btn = CreateButton(frame, 70, 25, filter.label)
+			btn:SetPoint("TOPLEFT", xOffset, -35)
+			
+			-- 更新按钮外观
+			local function UpdateButtonAppearance()
+				local fontString = btn:GetFontString()
+				if fontString then
+					if frame.selectedDateFilter == filter.key then
+						-- 选中状态：亮蓝色
+						fontString:SetTextColor(0.3, 0.7, 1)
+					else
+						-- 未选中状态：白色
+						fontString:SetTextColor(1, 1, 1)
+					end
+				end
+			end
+			
+			btn:SetScript("OnClick", function()
+				frame.selectedDateFilter = filter.key
+				-- 更新所有按钮外观
+				for _, b in pairs(frame.dateFilterButtons) do
+					if b.updateAppearance then
+						b.updateAppearance()
+					end
+				end
+				-- 刷新列表
+				KM:RefreshHistoryList()
+			end)
+			
+			btn.updateAppearance = UpdateButtonAppearance
+			frame.dateFilterButtons[filter.key] = btn
+			
+			UpdateButtonAppearance()
+			xOffset = xOffset + 75
+		end
 		
 		-- 搜索框
 		local searchLabel = CreateFS(frame, 12, "搜索:", false, "LEFT")
-		searchLabel:SetPoint("TOPLEFT", 20, -40)
+		searchLabel:SetPoint("TOPLEFT", 20, -70)
 		
 		local searchBox = CreateEditBox(frame, 200, 25)
 		searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 5, 0)
@@ -2493,15 +2658,20 @@ function KM:ShowHistoryUI()
 		
 		-- 清空按钮
 		local clearBtn = CreateButton(frame, 100, 25, "清空历史")
-		clearBtn:SetPoint("TOPRIGHT", -20, -40)
+		clearBtn:SetPoint("TOPRIGHT", -20, -70)
 		clearBtn:SetScript("OnClick", function()
 			KM:ClearHistory()
 			KM:RefreshHistoryList()
 		end)
 		
+		-- 操作提示（放在搜索框下方）
+		local hintText = CreateFS(frame, 11, "提示：双击可复制消息，右键可快速回复", false, "LEFT")
+		hintText:SetPoint("TOPLEFT", 20, -100)
+		hintText:SetTextColor(1, 0.8, 0)  -- 使用黄色更醒目
+		
 		-- 历史记录列表
 		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-		scrollFrame:SetPoint("TOPLEFT", 20, -75)
+		scrollFrame:SetPoint("TOPLEFT", 20, -125)  -- 调整顶部位置，为日期筛选和提示文字留出空间
 		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 20)
 		
 		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
@@ -2511,10 +2681,68 @@ function KM:ShowHistoryUI()
 		
 		-- 刷新历史记录列表
 		function KM:RefreshHistoryList(searchText)
+			-- 更新标题显示条数
+			local currentCount = #KeywordMonitorDB.History
+			local maxCount = KeywordMonitorDB.HistoryMaxCount
+			if frame.title then
+				frame.title:SetText(string.format("历史记录 (%d/%d)", currentCount, maxCount))
+			end
+			
+			-- 使用保存在frame上的scrollChild
+			local scrollChild = self.historyFrame and self.historyFrame.scrollChild
+			if not scrollChild then
+				print("|cffFF0000[ChatKeyword]|r 刷新失败: scrollChild不存在")
+				return
+			end
+			
+			-- 确保records表存在
+			if not scrollChild.records then
+				scrollChild.records = {}
+			end
+			
 			CleanupUIElements(scrollChild.records)
 			scrollChild.records = {}
 			
+			-- 获取历史记录
 			local history = searchText and KM:SearchHistory(searchText) or KM:GetHistory()
+			
+			-- 根据日期筛选过滤
+			local dateFilter = frame.selectedDateFilter or "all"
+			if dateFilter ~= "all" then
+				local now = time()
+				-- 获取今天0点的时间戳（使用date函数获取本地时间）
+				local dateTable = date("*t", now)
+				local todayStart = time({
+					year = dateTable.year,
+					month = dateTable.month,
+					day = dateTable.day,
+					hour = 0,
+					min = 0,
+					sec = 0
+				})
+				local yesterdayStart = todayStart - 86400  -- 昨天0点
+				local recent3Start = todayStart - (86400 * 2)  -- 3天前0点
+				
+				local filtered = {}
+				for _, record in ipairs(history) do
+					local recordTime = record.time or 0  -- 使用time字段（时间戳）
+					local include = false
+					
+					if dateFilter == "today" then
+						include = recordTime >= todayStart
+					elseif dateFilter == "yesterday" then
+						include = recordTime >= yesterdayStart and recordTime < todayStart
+					elseif dateFilter == "recent3" then
+						include = recordTime >= recent3Start
+					end
+					
+					if include then
+						tinsert(filtered, record)
+					end
+				end
+				
+				history = filtered
+			end
 			
 			local yOffset = -5
 			for i, record in ipairs(history) do
@@ -2554,20 +2782,42 @@ function KM:ShowHistoryUI()
 				timeText:SetPoint("TOPLEFT", 5, -5)
 				timeText:SetTextColor(0.7, 0.7, 0.7)
 				
-				-- 玩家名
+				-- 玩家名（使用职业颜色）
 				local nameText = CreateFS(recordFrame, 12, record.name, false, "LEFT")
 				nameText:SetPoint("TOPLEFT", 5, -20)
 				nameText:SetTextColor(record.r or 1, record.g or 1, record.b or 1)
 				
-				-- 消息内容
+				-- 消息内容（也使用职业颜色）
 				local msgText = CreateFS(recordFrame, 11, record.msg, false, "LEFT")
 				msgText:SetPoint("TOPLEFT", 5, -35)
 				msgText:SetPoint("RIGHT", -5, 0)
 				msgText:SetWordWrap(false)
+				msgText:SetTextColor(record.r or 1, record.g or 1, record.b or 1)  -- 使用职业颜色
 				
-				-- 点击回复
-				recordFrame:SetScript("OnClick", function()
-					KM:ShowQuickReplyForPlayer(record.author or record.name)
+				-- 注册左键和右键点击
+				recordFrame:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+				
+				-- 双击计时器
+				local lastClickTime = 0
+				
+				-- 点击事件
+				recordFrame:SetScript("OnClick", function(self, button)
+					if button == "LeftButton" then
+						-- 左键：双击打开编辑复制对话框
+						local currentTime = GetTime()
+						
+						if currentTime - lastClickTime < 0.3 then
+							-- 双击：显示编辑复制界面
+							KM:ShowEditCopyDialog(record)
+							lastClickTime = 0  -- 重置
+						else
+							-- 单击：记录时间，等待可能的第二次点击
+							lastClickTime = currentTime
+						end
+					elseif button == "RightButton" then
+						-- 右键：显示快速回复菜单
+						KM:ShowQuickReplyForPlayer(record.author or record.name)
+					end
 				end)
 				
 				tinsert(scrollChild.records, recordFrame)
@@ -2639,8 +2889,8 @@ function KM:ShowQuickReplyUI()
 		local title = CreateFS(frame, 16, "快速回复管理", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 添加新回复
@@ -2732,6 +2982,116 @@ function KM:ShowQuickReplyUI()
 	else
 		self.quickReplyFrame:Show()
 	end
+end
+
+-- 显示编辑复制对话框
+function KM:ShowEditCopyDialog(record)
+	-- 创建或复用对话框
+	if not self.editCopyDialog then
+		local dialog = CreateFrame("Frame", "KeywordMonitor_EditCopyDialog", UIParent, "BackdropTemplate")
+		dialog:SetSize(500, 250)
+		dialog:SetPoint("CENTER")
+		dialog:SetFrameStrata("FULLSCREEN_DIALOG")
+		dialog:SetFrameLevel(200)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			dialog:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			dialog:SetBackdropColor(0, 0, 0, 0.95)
+			dialog:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			dialog:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		dialog:Hide()
+		dialog:SetMovable(true)
+		dialog:EnableMouse(true)
+		dialog:RegisterForDrag("LeftButton")
+		dialog:SetScript("OnDragStart", dialog.StartMoving)
+		dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+		
+		local title = CreateFS(dialog, 14, "消息详情", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateCloseButton(dialog)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
+		closeBtn:SetScript("OnClick", function() dialog:Hide() end)
+		
+		-- 玩家名标签
+		local nameLabel = CreateFS(dialog, 12, "玩家:", false, "LEFT")
+		nameLabel:SetPoint("TOPLEFT", 20, -40)
+		
+		local nameText = CreateFS(dialog, 12, "", false, "LEFT")
+		nameText:SetPoint("LEFT", nameLabel, "RIGHT", 5, 0)
+		dialog.nameText = nameText
+		
+		-- 时间和频道标签
+		local infoLabel = CreateFS(dialog, 11, "", false, "LEFT")
+		infoLabel:SetPoint("TOPLEFT", 20, -60)
+		infoLabel:SetTextColor(0.7, 0.7, 0.7)
+		dialog.infoLabel = infoLabel
+		
+		-- 消息内容编辑框
+		local msgLabel = CreateFS(dialog, 12, "消息内容:", false, "LEFT")
+		msgLabel:SetPoint("TOPLEFT", 20, -85)
+		
+		local scrollFrame = CreateFrame("ScrollFrame", nil, dialog, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -105)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 50)
+		
+		local editBox = CreateFrame("EditBox", nil, scrollFrame)
+		editBox:SetMultiLine(true)
+		editBox:SetAutoFocus(false)
+		editBox:SetFontObject(ChatFontNormal)
+		editBox:SetWidth(440)
+		editBox:SetMaxLetters(0)
+		scrollFrame:SetScrollChild(editBox)
+		dialog.editBox = editBox
+		
+		-- 全选按钮
+		local selectAllBtn = CreateButton(dialog, 80, 25, "全选")
+		selectAllBtn:SetPoint("BOTTOMLEFT", 20, 15)
+		selectAllBtn:SetScript("OnClick", function()
+			editBox:SetFocus()
+			editBox:HighlightText()
+		end)
+		
+		-- 复制按钮（提示用户使用Ctrl+C）
+		local copyBtn = CreateButton(dialog, 120, 25, "复制 (Ctrl+C)")
+		copyBtn:SetPoint("LEFT", selectAllBtn, "RIGHT", 10, 0)
+		copyBtn:SetScript("OnClick", function()
+			editBox:SetFocus()
+			editBox:HighlightText()
+			print("|cff00FF00[ChatKeyword]|r 已全选，请按 Ctrl+C 复制")
+		end)
+		
+		-- 关闭按钮
+		local okBtn = CreateButton(dialog, 80, 25, "关闭")
+		okBtn:SetPoint("BOTTOMRIGHT", -20, 15)
+		okBtn:SetScript("OnClick", function() dialog:Hide() end)
+		
+		self.editCopyDialog = dialog
+	end
+	
+	-- 更新对话框内容
+	local dialog = self.editCopyDialog
+	dialog.nameText:SetText(record.name)
+	dialog.nameText:SetTextColor(record.r or 1, record.g or 1, record.b or 1)
+	dialog.infoLabel:SetText(record.timeStr .. " " .. record.channelName)
+	dialog.editBox:SetText(record.msg)
+	dialog.editBox:SetCursorPosition(0)
+	
+	dialog:Show()
 end
 
 -- 为特定玩家显示快速回复选择（修复内存泄漏 - 复用Frame）
@@ -2883,7 +3243,7 @@ function KM:ShowQuickReplyConfirmation(playerName, replyText)
 end
 
 -- 更新统计数据（优化版 - 避免创建临时表）
-function KM:UpdateStatistics(keyword, timestamp)
+function KM:UpdateStatistics(matchedKeywords, timestamp)
 	EnsureConfig()
 	
 	-- 增加今日匹配次数
@@ -2896,8 +3256,8 @@ function KM:UpdateStatistics(keyword, timestamp)
 	local keywordCounts = KeywordMonitorDB.Statistics.KeywordCounts
 	
 	-- 处理单个关键词
-	if type(keyword) == "string" then
-		if not keywordCounts[keyword] then
+	if type(matchedKeywords) == "string" then
+		if not keywordCounts[matchedKeywords] then
 			-- 检查是否已经有50个关键词
 			local count = 0
 			for _ in pairs(keywordCounts) do
@@ -2920,15 +3280,15 @@ function KM:UpdateStatistics(keyword, timestamp)
 				end
 			end
 			
-			keywordCounts[keyword] = 0
+			keywordCounts[matchedKeywords] = 0
 		end
-		keywordCounts[keyword] = keywordCounts[keyword] + 1
+		keywordCounts[matchedKeywords] = keywordCounts[matchedKeywords] + 1
 	end
 	
 	-- 处理组合关键词
-	if type(keyword) == "table" then
-		for i = 1, #keyword do
-			local subKey = keyword[i]
+	if type(matchedKeywords) == "table" then
+		for i = 1, #matchedKeywords do
+			local subKey = matchedKeywords[i]
 			if sub(subKey, 1, 1) ~= "&" then
 				if not keywordCounts[subKey] then
 					local count = 0
@@ -2966,9 +3326,10 @@ function KM:UpdateStatistics(keyword, timestamp)
 	end
 	hourCounts[hour] = hourCounts[hour] + 1
 	
-	-- 注释掉趋势数据和关联分析，减少内存占用
-	-- KM:UpdateTrendData(matchedKeywords, time)
-	-- KM:UpdateKeywordCorrelation(matchedKeywords)
+	-- 更新关联分析数据（轻量级版本）
+	if type(matchedKeywords) == "table" then
+		KM:UpdateKeywordCorrelation(matchedKeywords)
+	end
 end
 
 -- 更新趋势数据（优化版 - 减少频繁操作）
@@ -3413,8 +3774,8 @@ function KM:ShowStatisticsUI()
 		local title = CreateFS(frame, 16, "统计数据", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 今日匹配次数
@@ -4033,8 +4394,8 @@ function KM:ShowPresetsUI()
 		local title = CreateFS(frame, 16, "预设方案", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 说明
@@ -4298,8 +4659,8 @@ function KM:ShowExportUI()
 		local title = CreateFS(frame, 16, "导出配置", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		local desc = CreateFS(frame, 11, "复制下方文本，保存到安全的地方", false, "LEFT")
@@ -4381,8 +4742,8 @@ function KM:ShowImportUI()
 		local title = CreateFS(frame, 16, "导入配置", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		local desc = CreateFS(frame, 11, "粘贴导出的配置文本到下方", false, "LEFT")
@@ -4478,8 +4839,8 @@ function KM:ShowTrendAnalysisUI()
 		local title = CreateFS(frame, 16, "趋势分析 - 关键词热度变化", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 说明
@@ -4712,6 +5073,99 @@ function KM:ShowTrendAnalysisUI()
 	end
 end
 
+-- 智能分析历史记录，提取高频词组
+function KM:AnalyzeHistoryForCombinations()
+	EnsureConfig()
+	
+	-- 词频统计
+	local wordFreq = {}
+	-- 词组共现统计
+	local pairFreq = {}
+	
+	-- 常见的无意义词（停用词）
+	local stopWords = {
+		["的"] = true, ["了"] = true, ["在"] = true, ["是"] = true, ["我"] = true,
+		["有"] = true, ["和"] = true, ["就"] = true, ["不"] = true, ["人"] = true,
+		["都"] = true, ["一"] = true, ["个"] = true, ["上"] = true, ["也"] = true,
+		["很"] = true, ["到"] = true, ["说"] = true, ["要"] = true, ["去"] = true,
+		["你"] = true, ["会"] = true, ["着"] = true, ["没"] = true, ["看"] = true,
+		["好"] = true, ["自己"] = true, ["这"] = true, ["来"] = true, ["吗"] = true,
+		["啊"] = true, ["呢"] = true, ["吧"] = true, ["哦"] = true, ["嗯"] = true,
+		["哈"] = true, ["呀"] = true, ["呵"] = true, ["嘿"] = true, ["哟"] = true,
+	}
+	
+	-- 添加标点符号到停用词
+	local punctuations = {
+		",", "，", ".", "。", "!", "！", "?", "？", ":", "：",
+		";", "；", "、", " ", "　", "(", ")", "（", "）",
+		"【", "】", "{", "}", "《", "》", "<", ">", "-",
+		"—", "_", "+", "=", "/", "|", "~", "`"
+	}
+	for _, p in ipairs(punctuations) do
+		stopWords[p] = true
+	end
+	
+	-- 添加用户自定义停用词
+	for _, word in ipairs(KeywordMonitorDB.CustomStopWords) do
+		stopWords[word] = true
+	end
+	
+	-- 扫描历史记录
+	for _, record in ipairs(KeywordMonitorDB.History) do
+		local msg = record.msg
+		-- 清理消息，提取词汇
+		local cleanMsg = gsub(msg, "|c%x%x%x%x%x%x%x%x", "")  -- 移除颜色代码
+		cleanMsg = gsub(cleanMsg, "|r", "")
+		cleanMsg = gsub(cleanMsg, "|H.-|h", "")  -- 移除链接
+		cleanMsg = gsub(cleanMsg, "|h", "")
+		
+		-- 提取2-4个字符的词汇
+		local words = {}
+		for word in gmatch(cleanMsg, "[%z\1-\127\194-\244][\128-\191]*[%z\1-\127\194-\244][\128-\191]*[%z\1-\127\194-\244][\128-\191]*[%z\1-\127\194-\244]?[\128-\191]*") do
+			word = gsub(word, "^%s*(.-)%s*$", "%1")  -- 去除首尾空格
+			if #word >= 4 and #word <= 12 and not stopWords[word] then  -- 2-4个汉字
+				-- 应用词汇替换映射
+				local mappedWord = KeywordMonitorDB.WordReplacements[word] or word
+				
+				-- 统计词频
+				wordFreq[mappedWord] = (wordFreq[mappedWord] or 0) + 1
+				tinsert(words, mappedWord)
+			end
+		end
+		
+		-- 统计词组共现
+		for i = 1, #words do
+			for j = i + 1, #words do
+				local word1, word2 = words[i], words[j]
+				if word1 ~= word2 then
+					local pair = word1 < word2 and (word1 .. "|" .. word2) or (word2 .. "|" .. word1)
+					pairFreq[pair] = (pairFreq[pair] or 0) + 1
+				end
+			end
+		end
+	end
+	
+	-- 转换为列表并排序
+	local wordList = {}
+	for word, count in pairs(wordFreq) do
+		if count >= 3 then  -- 至少出现3次
+			tinsert(wordList, {word = word, count = count})
+		end
+	end
+	sort(wordList, function(a, b) return a.count > b.count end)
+	
+	local pairList = {}
+	for pair, count in pairs(pairFreq) do
+		if count >= 2 then  -- 至少共现2次
+			local word1, word2 = pair:match("([^|]+)|([^|]+)")
+			tinsert(pairList, {word1 = word1, word2 = word2, count = count})
+		end
+	end
+	sort(pairList, function(a, b) return a.count > b.count end)
+	
+	return wordList, pairList
+end
+
 -- 显示关联分析界面
 function KM:ShowCorrelationAnalysisUI()
 	EnsureConfig()
@@ -4749,123 +5203,192 @@ function KM:ShowCorrelationAnalysisUI()
 		frame:SetScript("OnDragStart", frame.StartMoving)
 		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 		
-		local title = CreateFS(frame, 16, "关联分析 - 关键词组合", true)
+		local title = CreateFS(frame, 16, "智能分析 - 高频词组推荐", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
-		-- 说明
-		local desc = CreateFS(frame, 11, "查看经常一起出现的关键词组合，优化关键词设置", false, "LEFT")
+		-- 说明文字
+		local desc = CreateFS(frame, 11, "从历史记录中分析出现频率最高的词组，点击添加为关键词组合", false, "LEFT")
 		desc:SetPoint("TOPLEFT", 20, -40)
 		desc:SetTextColor(0.7, 0.7, 0.7)
 		
-		-- 关键词选择
-		local kwLabel = CreateFS(frame, 14, "选择关键词:", false, "LEFT")
-		kwLabel:SetPoint("TOPLEFT", 20, -65)
+		-- 分析按钮
+		local analyzeBtn = CreateButton(frame, 100, 25, "重新分析")
+		analyzeBtn:SetPoint("TOPRIGHT", -130, -35)
+		analyzeBtn:SetScript("OnClick", function()
+			KM:RefreshCorrelationAnalysis()
+		end)
+		
+		-- 停用词管理按钮
+		local stopWordsBtn = CreateButton(frame, 120, 25, "管理停用词")
+		stopWordsBtn:SetPoint("TOPRIGHT", -20, -35)
+		stopWordsBtn:SetScript("OnClick", function()
+			KM:ShowStopWordsUI()
+		end)
+		
+		-- 高频词汇标签
+		local kwLabel = CreateFS(frame, 14, "高频词汇:", false, "LEFT")
+		kwLabel:SetPoint("TOPLEFT", 20, -70)
 		kwLabel:SetTextColor(1, 0.8, 0)
+		frame.kwLabel = kwLabel
 		
 		-- 关键词列表
 		local kwScroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-		kwScroll:SetPoint("TOPLEFT", 20, -90)
+		kwScroll:SetPoint("TOPLEFT", 20, -95)
 		kwScroll:SetSize(250, 360)
 		
 		local kwChild = CreateFrame("Frame", nil, kwScroll)
 		kwChild:SetSize(230, 1)
+		kwChild.items = {}
 		kwScroll:SetScrollChild(kwChild)
 		frame.kwChild = kwChild
 		
-		-- 关联关键词列表
-		local correlationLabel = CreateFS(frame, 14, "经常一起出现的关键词:", false, "LEFT")
-		correlationLabel:SetPoint("TOPLEFT", 290, -65)
+		-- 推荐词组标签
+		local correlationLabel = CreateFS(frame, 14, "推荐词组组合:", false, "LEFT")
+		correlationLabel:SetPoint("TOPLEFT", 290, -70)
 		correlationLabel:SetTextColor(1, 0.8, 0)
 		frame.correlationLabel = correlationLabel
 		
+		-- 关联关键词列表
 		local correlationScroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
-		correlationScroll:SetPoint("TOPLEFT", 290, -90)
+		correlationScroll:SetPoint("TOPLEFT", 290, -95)
 		correlationScroll:SetSize(290, 360)
 		
 		local correlationChild = CreateFrame("Frame", nil, correlationScroll)
 		correlationChild:SetSize(270, 1)
+		correlationChild.items = {}
 		correlationScroll:SetScrollChild(correlationChild)
 		frame.correlationChild = correlationChild
 		
-		-- 刷新关联分析
-		function KM:RefreshCorrelationAnalysis(selectedKeyword)
-			-- 刷新关键词列表
+		-- 刷新关联分析（使用智能分析）
+		function KM:RefreshCorrelationAnalysis()
+			-- 执行智能分析
+			local wordList, pairList = KM:AnalyzeHistoryForCombinations()
+			
+			-- 清空旧内容
 			CleanupUIElements(frame.kwChild.items)
 			frame.kwChild.items = {}
-			
-			local topKeywords = KM:GetTopKeywords(30)
-			local yOffset = -5
-			for i, data in ipairs(topKeywords) do
-				local btn = CreateButton(frame.kwChild, 220, 25, data.keyword .. " (" .. data.count .. ")")
-				btn:SetPoint("TOPLEFT", 5, yOffset)
-				btn:SetScript("OnClick", function()
-					KM:RefreshCorrelationAnalysis(data.keyword)
-				end)
-				
-				tinsert(frame.kwChild.items, btn)
-				yOffset = yOffset - 30
-			end
-			frame.kwChild:SetHeight(math.max(1, -yOffset))
-			
-			-- 刷新关联关键词
 			CleanupUIElements(frame.correlationChild.items)
 			frame.correlationChild.items = {}
 			
-			if selectedKeyword then
-				frame.correlationLabel:SetText("与 " .. selectedKeyword .. " 经常一起出现:")
-				
-				local correlations = KM:GetKeywordCorrelations(selectedKeyword, 10)
-				
-				if #correlations == 0 then
-					local noData = CreateFS(frame.correlationChild, 12, "暂无关联数据", false, "CENTER")
-					noData:SetPoint("TOP", 0, -50)
-					noData:SetTextColor(0.5, 0.5, 0.5)
-					tinsert(frame.correlationChild.items, noData)
-					frame.correlationChild:SetHeight(1)
-				else
-					yOffset = -5
-					for i, data in ipairs(correlations) do
-						local itemFrame = CreateFrame("Frame", nil, frame.correlationChild, "BackdropTemplate")
-						itemFrame:SetSize(260, 40)
-						itemFrame:SetPoint("TOPLEFT", 5, yOffset)
-						
-						if KeywordMonitorDB.UseNDuiStyle then
-							itemFrame:SetBackdrop({
-								bgFile = "Interface\\Buttons\\WHITE8X8",
-								edgeFile = "Interface\\Buttons\\WHITE8X8",
-								edgeSize = 1,
-							})
-							itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.7)
-							itemFrame:SetBackdropBorderColor(0, 0, 0, 1)
-						else
-							itemFrame:SetBackdrop({
-								bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-								edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-								tile = true,
-								tileSize = 16,
-								edgeSize = 12,
-								insets = { left = 2, right = 2, top = 2, bottom = 2 }
-							})
-							itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.7)
+			-- 显示高频单词（左侧）
+			frame.kwLabel:SetText(string.format("高频词汇 (Top %d):", math.min(20, #wordList)))
+			
+			if #wordList == 0 then
+				local noData = CreateFS(frame.kwChild, 12, "暂无数据\n请先提取一些消息", false, "CENTER")
+				noData:SetPoint("CENTER", 0, 0)
+				noData:SetTextColor(0.5, 0.5, 0.5)
+				tinsert(frame.kwChild.items, noData)
+				frame.kwChild:SetHeight(1)
+			else
+				local yOffset = -5
+				for i = 1, math.min(20, #wordList) do
+					local data = wordList[i]
+					local btn = CreateFrame("Button", nil, frame.kwChild, "UIPanelButtonTemplate")
+					btn:SetSize(220, 25)
+					btn:SetPoint("TOPLEFT", 5, yOffset)
+					btn:SetText(data.word .. " (" .. data.count .. ")")
+					
+					-- 注册左键和右键点击
+					btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+					btn:SetScript("OnClick", function(self, button)
+						if button == "LeftButton" then
+							-- 左键：编辑词汇
+							KM:ShowEditWordDialog(data.word)
+						elseif button == "RightButton" then
+							-- 右键：添加到停用词
+							tinsert(KeywordMonitorDB.CustomStopWords, data.word)
+							print("|cffFFFF00[ChatKeyword]|r 已将 \"" .. data.word .. "\" 添加到停用词列表")
+							-- 重新分析
+							KM:RefreshCorrelationAnalysis()
 						end
+					end)
+					
+					-- 鼠标提示
+					btn:SetScript("OnEnter", function(self)
+						GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+						GameTooltip:AddLine("左键点击可编辑词汇", 1, 1, 1)
+						GameTooltip:AddLine("右键点击可添加到停用词", 0.7, 0.7, 0.7)
+						GameTooltip:Show()
+					end)
+					btn:SetScript("OnLeave", function(self)
+						GameTooltip:Hide()
+					end)
+					
+					tinsert(frame.kwChild.items, btn)
+					yOffset = yOffset - 30
+				end
+				frame.kwChild:SetHeight(math.max(1, -yOffset))
+			end
+			
+			-- 显示高频词组（右侧）
+			frame.correlationLabel:SetText(string.format("推荐词组组合 (Top %d):", math.min(15, #pairList)))
+			
+			if #pairList == 0 then
+				local noData = CreateFS(frame.correlationChild, 12, "暂无词组数据\n需要更多历史记录", false, "CENTER")
+				noData:SetPoint("CENTER", 0, 0)
+				noData:SetTextColor(0.5, 0.5, 0.5)
+				tinsert(frame.correlationChild.items, noData)
+				frame.correlationChild:SetHeight(1)
+			else
+				local yOffset = -5
+				for i = 1, math.min(15, #pairList) do
+					local data = pairList[i]
+					local itemFrame = CreateFrame("Frame", nil, frame.correlationChild, "BackdropTemplate")
+					itemFrame:SetSize(260, 50)
+					itemFrame:SetPoint("TOPLEFT", 5, yOffset)
+					
+					if KeywordMonitorDB.UseNDuiStyle then
+						itemFrame:SetBackdrop({
+							bgFile = "Interface\\Buttons\\WHITE8X8",
+							edgeFile = "Interface\\Buttons\\WHITE8X8",
+							edgeSize = 1,
+						})
+						itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.7)
+						itemFrame:SetBackdropBorderColor(0, 0, 0, 1)
+					else
+						itemFrame:SetBackdrop({
+							bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+							edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+							tile = true,
+							tileSize = 16,
+							edgeSize = 12,
+							insets = { left = 2, right = 2, top = 2, bottom = 2 }
+						})
+						itemFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.7)
+					end
+					
+					-- 词组显示
+					local comboText = CreateFS(itemFrame, 13, data.word1 .. " + " .. data.word2, true, "LEFT")
+					comboText:SetPoint("TOPLEFT", 10, -8)
+					comboText:SetTextColor(1, 0.8, 0)
+					
+					local countText = CreateFS(itemFrame, 11, string.format("共同出现 %d 次", data.count), false, "LEFT")
+					countText:SetPoint("TOPLEFT", 10, -25)
+					countText:SetTextColor(0.7, 0.7, 0.7)
+					
+					-- 添加按钮
+					local addBtn = CreateButton(itemFrame, 80, 20, "添加组合")
+					addBtn:SetPoint("RIGHT", -5, 0)
+					addBtn:SetScript("OnClick", function()
+						local combo = data.word1 .. "+" .. data.word2
 						
-						local kwText = CreateFS(itemFrame, 13, data.keyword, true, "LEFT")
-						kwText:SetPoint("TOPLEFT", 10, -8)
-						kwText:SetTextColor(0, 1, 0)
-						
-						local countText = CreateFS(itemFrame, 11, string.format("一起出现 %d 次", data.count), false, "LEFT")
-						countText:SetPoint("TOPLEFT", 10, -23)
-						countText:SetTextColor(0.7, 0.7, 0.7)
-						
-						-- 添加按钮：将组合添加为关键词
-						local addBtn = CreateButton(itemFrame, 80, 20, "添加组合")
-						addBtn:SetPoint("RIGHT", -5, 0)
-						addBtn:SetScript("OnClick", function()
-							local combo = selectedKeyword .. "+" .. data.keyword
+						-- 检查是否启用分组模式
+						if KeywordMonitorDB.UseKeywordGroups then
+							-- 添加为新的关键词分组
+							local groupName = data.word1 .. "+" .. data.word2
+							KM:AddKeywordGroup(groupName, combo)
+							print("|cff00FF00[ChatKeyword]|r 已创建关键词分组: " .. groupName)
+							
+							-- 刷新分组列表（如果分组界面已打开）
+							if self.groupsFrame and self.groupsFrame:IsShown() then
+								KM:RefreshGroupsList()
+							end
+						else
+							-- 添加到传统关键词字符串
 							local currentKeywords = KeywordMonitorDB.Keywords or ""
 							if currentKeywords == "" then
 								KeywordMonitorDB.Keywords = combo
@@ -4874,21 +5397,16 @@ function KM:ShowCorrelationAnalysisUI()
 							end
 							KM:UpdateKeywordList(KeywordMonitorDB.Keywords)
 							print("|cff00FF00[ChatKeyword]|r 已添加组合关键词: " .. combo)
-						end)
+						end
 						
-						tinsert(frame.correlationChild.items, itemFrame)
-						yOffset = yOffset - 45
-					end
-					frame.correlationChild:SetHeight(math.max(1, -yOffset))
+						-- 关闭关联分析界面
+						frame:Hide()
+					end)
+					
+					tinsert(frame.correlationChild.items, itemFrame)
+					yOffset = yOffset - 55
 				end
-			else
-				frame.correlationLabel:SetText("经常一起出现的关键词:")
-				
-				local noData = CreateFS(frame.correlationChild, 12, "请选择关键词", false, "CENTER")
-				noData:SetPoint("TOP", 0, -50)
-				noData:SetTextColor(0.5, 0.5, 0.5)
-				tinsert(frame.correlationChild.items, noData)
-				frame.correlationChild:SetHeight(1)
+				frame.correlationChild:SetHeight(math.max(1, -yOffset))
 			end
 		end
 		
@@ -4903,6 +5421,286 @@ function KM:ShowCorrelationAnalysisUI()
 		self.correlationFrame:Hide()
 	else
 		self.correlationFrame:Show()
+	end
+end
+
+-- 显示编辑词汇对话框
+function KM:ShowEditWordDialog(originalWord)
+	-- 创建或复用对话框
+	if not self.editWordDialog then
+		local dialog = CreateFrame("Frame", "KeywordMonitor_EditWordDialog", UIParent, "BackdropTemplate")
+		dialog:SetSize(400, 180)
+		dialog:SetPoint("CENTER")
+		dialog:SetFrameStrata("FULLSCREEN_DIALOG")
+		dialog:SetFrameLevel(130)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			dialog:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			dialog:SetBackdropColor(0, 0, 0, 0.95)
+			dialog:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			dialog:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		dialog:Hide()
+		dialog:SetMovable(true)
+		dialog:EnableMouse(true)
+		dialog:RegisterForDrag("LeftButton")
+		dialog:SetScript("OnDragStart", dialog.StartMoving)
+		dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+		
+		local title = CreateFS(dialog, 16, "编辑词汇", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateCloseButton(dialog)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
+		closeBtn:SetScript("OnClick", function() dialog:Hide() end)
+		
+		-- 原词汇显示
+		local originalLabel = CreateFS(dialog, 12, "原词汇:", false, "LEFT")
+		originalLabel:SetPoint("TOPLEFT", 20, -45)
+		
+		local originalText = CreateFS(dialog, 13, "", true, "LEFT")
+		originalText:SetPoint("LEFT", originalLabel, "RIGHT", 10, 0)
+		originalText:SetTextColor(1, 0.8, 0)
+		dialog.originalText = originalText
+		
+		-- 新词汇输入
+		local newLabel = CreateFS(dialog, 12, "新词汇:", false, "LEFT")
+		newLabel:SetPoint("TOPLEFT", 20, -75)
+		
+		local newBox = CreateEditBox(dialog, 250, 30)
+		newBox:SetPoint("LEFT", newLabel, "RIGHT", 10, 0)
+		dialog.newBox = newBox
+		
+		-- 按钮
+		local applyBtn = CreateButton(dialog, 80, 30, "应用")
+		applyBtn:SetPoint("BOTTOM", -45, 20)
+		applyBtn:SetScript("OnClick", function()
+			local newWord = newBox:GetText()
+			if newWord and newWord ~= "" and newWord ~= dialog.currentWord then
+				-- 添加词汇替换映射：原词汇 -> 新词汇
+				KeywordMonitorDB.WordReplacements[dialog.currentWord] = newWord
+				
+				print("|cff00FF00[ChatKeyword]|r 已将 \"" .. dialog.currentWord .. "\" 映射为 \"" .. newWord .. "\"")
+				print("|cffFFFF00[ChatKeyword]|r 下次分析时会自动合并统计")
+				
+				-- 重新分析
+				if KM.correlationFrame and KM.correlationFrame:IsShown() then
+					KM:RefreshCorrelationAnalysis()
+				end
+				
+				dialog:Hide()
+			end
+		end)
+		
+		local cancelBtn = CreateButton(dialog, 80, 30, "取消")
+		cancelBtn:SetPoint("BOTTOM", 45, 20)
+		cancelBtn:SetScript("OnClick", function()
+			dialog:Hide()
+		end)
+		
+		-- 回车应用
+		newBox:SetScript("OnEnterPressed", function()
+			applyBtn:Click()
+		end)
+		
+		-- ESC取消
+		newBox:SetScript("OnEscapePressed", function()
+			dialog:Hide()
+		end)
+		
+		self.editWordDialog = dialog
+	end
+	
+	-- 设置内容
+	self.editWordDialog.currentWord = originalWord
+	self.editWordDialog.originalText:SetText(originalWord)
+	self.editWordDialog.newBox:SetText(originalWord)
+	self.editWordDialog.newBox:SetFocus()
+	self.editWordDialog.newBox:HighlightText()
+	self.editWordDialog:Show()
+end
+
+-- 显示停用词管理界面
+function KM:ShowStopWordsUI()
+	EnsureConfig()
+	
+	if not self.stopWordsFrame then
+		local frame = CreateFrame("Frame", "KeywordMonitor_StopWordsUI", UIParent, "BackdropTemplate")
+		frame:SetSize(450, 400)
+		frame:SetPoint("CENTER")
+		frame:SetFrameStrata("FULLSCREEN_DIALOG")
+		frame:SetFrameLevel(120)
+		
+		if KeywordMonitorDB.UseNDuiStyle then
+			frame:SetBackdrop({
+				bgFile = "Interface\\Buttons\\WHITE8X8",
+				edgeFile = "Interface\\Buttons\\WHITE8X8",
+				edgeSize = 1,
+			})
+			frame:SetBackdropColor(0, 0, 0, 0.95)
+			frame:SetBackdropBorderColor(0, 0, 0, 1)
+		else
+			frame:SetBackdrop({
+				bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+				edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+				tile = true,
+				tileSize = 32,
+				edgeSize = 32,
+				insets = { left = 11, right = 12, top = 12, bottom = 11 }
+			})
+		end
+		
+		frame:Hide()
+		frame:SetMovable(true)
+		frame:EnableMouse(true)
+		frame:RegisterForDrag("LeftButton")
+		frame:SetScript("OnDragStart", frame.StartMoving)
+		frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+		
+		local title = CreateFS(frame, 16, "停用词管理", true)
+		title:SetPoint("TOP", 0, -10)
+		
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
+		closeBtn:SetScript("OnClick", function() frame:Hide() end)
+		
+		-- 说明文字
+		local desc = CreateFS(frame, 11, "停用词不会出现在智能分析的高频词汇中", false, "LEFT")
+		desc:SetPoint("TOPLEFT", 20, -40)
+		desc:SetTextColor(0.7, 0.7, 0.7)
+		
+		-- 添加停用词
+		local addLabel = CreateFS(frame, 12, "添加停用词:", false, "LEFT")
+		addLabel:SetPoint("TOPLEFT", 20, -65)
+		
+		local addBox = CreateEditBox(frame, 200, 25)
+		addBox:SetPoint("LEFT", addLabel, "RIGHT", 5, 0)
+		
+		local addBtn = CreateButton(frame, 60, 25, "添加")
+		addBtn:SetPoint("LEFT", addBox, "RIGHT", 5, 0)
+		addBtn:SetScript("OnClick", function()
+			local text = addBox:GetText()
+			if text and text ~= "" then
+				-- 检查是否已存在
+				local exists = false
+				for _, word in ipairs(KeywordMonitorDB.CustomStopWords) do
+					if word == text then
+						exists = true
+						break
+					end
+				end
+				
+				if not exists then
+					tinsert(KeywordMonitorDB.CustomStopWords, text)
+					addBox:SetText("")
+					KM:RefreshStopWordsList()
+					print("|cff00FF00[ChatKeyword]|r 已添加停用词: " .. text)
+				else
+					print("|cffFFFF00[ChatKeyword]|r 停用词已存在: " .. text)
+				end
+			end
+		end)
+		
+		addBox:SetScript("OnEnterPressed", function(self)
+			addBtn:Click()
+		end)
+		
+		-- 清空按钮
+		local clearBtn = CreateButton(frame, 100, 25, "清空全部")
+		clearBtn:SetPoint("TOPRIGHT", -20, -65)
+		clearBtn:SetScript("OnClick", function()
+			KeywordMonitorDB.CustomStopWords = {}
+			KM:RefreshStopWordsList()
+			print("|cff00FF00[ChatKeyword]|r 已清空所有自定义停用词")
+		end)
+		
+		-- 停用词列表
+		local scrollFrame = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+		scrollFrame:SetPoint("TOPLEFT", 20, -100)
+		scrollFrame:SetPoint("BOTTOMRIGHT", -40, 20)
+		
+		local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+		scrollChild:SetSize(390, 1)
+		scrollFrame:SetScrollChild(scrollChild)
+		frame.scrollChild = scrollChild
+		
+		-- 刷新停用词列表
+		function KM:RefreshStopWordsList()
+			CleanupUIElements(scrollChild.words)
+			scrollChild.words = {}
+			
+			local yOffset = -5
+			for i, word in ipairs(KeywordMonitorDB.CustomStopWords) do
+				local wordFrame = CreateFrame("Frame", nil, scrollChild, "BackdropTemplate")
+				wordFrame:SetSize(370, 30)
+				wordFrame:SetPoint("TOPLEFT", 5, yOffset)
+				
+				if KeywordMonitorDB.UseNDuiStyle then
+					wordFrame:SetBackdrop({
+						bgFile = "Interface\\Buttons\\WHITE8X8",
+						edgeFile = "Interface\\Buttons\\WHITE8X8",
+						edgeSize = 1,
+					})
+					wordFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+					wordFrame:SetBackdropBorderColor(0, 0, 0, 1)
+				else
+					wordFrame:SetBackdrop({
+						bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+						edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+						tile = true,
+						tileSize = 16,
+						edgeSize = 12,
+						insets = { left = 2, right = 2, top = 2, bottom = 2 }
+					})
+					wordFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.6)
+				end
+				
+				local text = CreateFS(wordFrame, 12, word, false, "LEFT")
+				text:SetPoint("LEFT", 10, 0)
+				text:SetPoint("RIGHT", -60, 0)
+				
+				-- 使用局部变量保存索引
+				local currentIndex = i
+				
+				local delBtn = CreateButton(wordFrame, 50, 20, "删除")
+				delBtn:SetPoint("RIGHT", -5, 0)
+				delBtn:SetScript("OnClick", function()
+					tremove(KeywordMonitorDB.CustomStopWords, currentIndex)
+					KM:RefreshStopWordsList()
+					print("|cff00FF00[ChatKeyword]|r 已删除停用词: " .. word)
+				end)
+				
+				tinsert(scrollChild.words, wordFrame)
+				yOffset = yOffset - 35
+			end
+			
+			scrollChild:SetHeight(math.max(1, -yOffset))
+		end
+		
+		frame:SetScript("OnShow", function()
+			KM:RefreshStopWordsList()
+		end)
+		
+		self.stopWordsFrame = frame
+	end
+	
+	if self.stopWordsFrame:IsShown() then
+		self.stopWordsFrame:Hide()
+	else
+		self.stopWordsFrame:Show()
 	end
 end
 
@@ -4946,8 +5744,8 @@ function KM:ShowPerformanceUI()
 		local title = CreateFS(frame, 16, "性能监控", true)
 		title:SetPoint("TOP", 0, -10)
 		
-		local closeBtn = CreateButton(frame, 20, 20, "X")
-		closeBtn:SetPoint("TOPRIGHT", -5, -5)
+		local closeBtn = CreateCloseButton(frame)
+		closeBtn:SetPoint("TOPRIGHT", -10, -10)
 		closeBtn:SetScript("OnClick", function() frame:Hide() end)
 		
 		-- 内存使用
