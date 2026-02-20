@@ -51,7 +51,22 @@ local defaultConfig = {
 	InheritFilter = true,
 	KeywordFrameHeight = 180,
 	BgColor = {0, 0, 0, 0.4},
-	UseNDuiStyle = false  -- 是否使用 NDui 美化
+	UseNDuiStyle = false,  -- 是否使用 NDui 美化
+	-- 多频道支持
+	Channels = {
+		CHANNEL = true,   -- 频道聊天（默认开启，保持原有功能）
+		SAY = false,      -- 说
+		YELL = false,     -- 大喊
+		WHISPER = false,  -- 密语
+		GUILD = false,    -- 公会
+		PARTY = false,    -- 队伍
+		RAID = false,     -- 团队
+	},
+	-- 黑名单
+	Blacklist = {
+		Players = {},     -- 玩家黑名单 {["玩家名"] = true}
+		Keywords = {},    -- 关键词黑名单 {["关键词"] = true}
+	}
 }
 
 -- 初始化配置
@@ -62,8 +77,29 @@ local function EnsureConfig()
 	
 	for k, v in pairs(defaultConfig) do
 		if KeywordMonitorDB[k] == nil then
-			KeywordMonitorDB[k] = v
+			if type(v) == "table" then
+				KeywordMonitorDB[k] = {}
+				for sk, sv in pairs(v) do
+					KeywordMonitorDB[k][sk] = sv
+				end
+			else
+				KeywordMonitorDB[k] = v
+			end
 		end
+	end
+	
+	-- 确保子表存在
+	if not KeywordMonitorDB.Channels then
+		KeywordMonitorDB.Channels = defaultConfig.Channels
+	end
+	if not KeywordMonitorDB.Blacklist then
+		KeywordMonitorDB.Blacklist = {Players = {}, Keywords = {}}
+	end
+	if not KeywordMonitorDB.Blacklist.Players then
+		KeywordMonitorDB.Blacklist.Players = {}
+	end
+	if not KeywordMonitorDB.Blacklist.Keywords then
+		KeywordMonitorDB.Blacklist.Keywords = {}
 	end
 end
 
@@ -156,6 +192,42 @@ local function IsFriend(name)
 	return false
 end
 
+-- 清理文本函数
+local function CleanText(text)
+	if not text then return "" end
+	text = gsub(text, "|H.-|h%[.-%]|h", "")
+	text = gsub(text, "|c%x%x%x%x%x%x%x%x", "")
+	text = gsub(text, "|r", "")
+	text = gsub(text, "|T[^|]+|t", "")
+	text = gsub(text, "|T[^|]+|T", "")
+	text = gsub(text, "[%p%s]", "")
+	text = upper(text)
+	return text
+end
+
+-- 检查是否在黑名单中
+local function IsBlacklisted(name, text)
+	EnsureConfig()
+	
+	-- 检查玩家黑名单
+	if name and KeywordMonitorDB.Blacklist.Players[name] then
+		return true
+	end
+	
+	-- 检查关键词黑名单
+	if text then
+		local cleanText = CleanText(text)
+		for keyword, _ in pairs(KeywordMonitorDB.Blacklist.Keywords) do
+			local cleanKeyword = upper(keyword)
+			if find(cleanText, cleanKeyword, 1, true) then
+				return true
+			end
+		end
+	end
+	
+	return false
+end
+
 -- 检查是否是重复消息
 local function IsRepeatMessage(text)
 	local currentTime = GetTime()
@@ -189,19 +261,6 @@ local function SplitString(str, delimiter)
 		end
 	end
 	return result
-end
-
--- 清理文本函数
-local function CleanText(text)
-	if not text then return "" end
-	text = gsub(text, "|H.-|h%[.-%]|h", "")
-	text = gsub(text, "|c%x%x%x%x%x%x%x%x", "")
-	text = gsub(text, "|r", "")
-	text = gsub(text, "|T[^|]+|t", "")
-	text = gsub(text, "|T[^|]+|T", "")
-	text = gsub(text, "[%p%s]", "")
-	text = upper(text)
-	return text
 end
 
 -- 高亮关键词
@@ -431,19 +490,28 @@ local function ShowKeywordMessage(self, event, msg, author, ...)
 	local guid = select(11, ...)
 	local name = Ambiguate(author, "none")
 	
+	-- 过滤自己的消息
 	if name == UnitName("player") then
 		return false
 	end
 	
+	-- 过滤好友消息
 	if IsFriend(name) then
 		return false
 	end
 	
+	-- 检查黑名单
+	if IsBlacklisted(name, msg) then
+		return false
+	end
+	
+	-- 检查关键词匹配
 	local matched, keyword = MatchKeywords(msg)
 	if not matched then return false end
 	
 	local cleanMsg = CleanText(msg)
 	
+	-- 过滤重复消息
 	if IsRepeatMessage(cleanMsg) then
 		return false
 	end
@@ -533,7 +601,20 @@ function KM:ToggleKeywordMonitor(enable)
 	EnsureConfig()
 	KeywordMonitorDB.Enabled = enable
 	
-	ChatFrame_RemoveMessageEventFilter("CHAT_MSG_CHANNEL", ShowKeywordMessage)
+	-- 移除所有频道的过滤器
+	local channelEvents = {
+		CHANNEL = "CHAT_MSG_CHANNEL",
+		SAY = "CHAT_MSG_SAY",
+		YELL = "CHAT_MSG_YELL",
+		WHISPER = "CHAT_MSG_WHISPER",
+		GUILD = "CHAT_MSG_GUILD",
+		PARTY = "CHAT_MSG_PARTY",
+		RAID = "CHAT_MSG_RAID",
+	}
+	
+	for _, eventName in pairs(channelEvents) do
+		ChatFrame_RemoveMessageEventFilter(eventName, ShowKeywordMessage)
+	end
 	
 	if enable then
 		if KeywordMonitorDB.OutputMode == 2 then
@@ -558,7 +639,12 @@ function KM:ToggleKeywordMonitor(enable)
 			end
 		end
 		
-		ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL", ShowKeywordMessage)
+		-- 注册已启用的频道过滤器
+		for channelKey, eventName in pairs(channelEvents) do
+			if KeywordMonitorDB.Channels[channelKey] then
+				ChatFrame_AddMessageEventFilter(eventName, ShowKeywordMessage)
+			end
+		end
 	else
 		if keywordFrame then
 			keywordFrame:Hide()
@@ -587,7 +673,7 @@ local function CreateConfigFrame()
 	EnsureConfig()
 	
 	local frame = CreateFrame("Frame", "KeywordMonitor_Config", UIParent, "BackdropTemplate")
-	frame:SetSize(500, 520)
+	frame:SetSize(500, 550)
 	frame:SetPoint("CENTER")
 	frame:SetFrameStrata("DIALOG")
 	
@@ -697,9 +783,228 @@ local function CreateConfigFrame()
 		KeywordMonitorDB.InheritFilter = checked
 	end)
 	
+	-- 频道选择按钮
+	local channelBtn = CreateButton(frame, 120, 25, "频道选择")
+	channelBtn:SetPoint("TOPLEFT", 20, -290)
+	channelBtn:SetScript("OnClick", function()
+		-- 创建频道选择弹窗
+		if not frame.channelPopup then
+			local popup = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+			popup:SetSize(250, 220)
+			popup:SetPoint("CENTER", frame, "CENTER", -130, 0)
+			popup:SetFrameLevel(frame:GetFrameLevel() + 10)
+			
+			if KeywordMonitorDB.UseNDuiStyle then
+				popup:SetBackdrop({
+					bgFile = "Interface\\Buttons\\WHITE8X8",
+					edgeFile = "Interface\\Buttons\\WHITE8X8",
+					edgeSize = 1,
+				})
+				popup:SetBackdropColor(0, 0, 0, 0.9)
+				popup:SetBackdropBorderColor(0, 0, 0, 1)
+			else
+				popup:SetBackdrop({
+					bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+					edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+					tile = true,
+					tileSize = 16,
+					edgeSize = 12,
+					insets = { left = 2, right = 2, top = 2, bottom = 2 }
+				})
+			end
+			
+			popup:Hide()
+			
+			local popupTitle = CreateFS(popup, 14, "选择监控频道", true)
+			popupTitle:SetPoint("TOP", 0, -10)
+			
+			local channels = {
+				{key = "CHANNEL", label = "频道聊天"},
+				{key = "SAY", label = "说"},
+				{key = "YELL", label = "大喊"},
+				{key = "WHISPER", label = "密语"},
+				{key = "GUILD", label = "公会"},
+				{key = "PARTY", label = "队伍"},
+				{key = "RAID", label = "团队"},
+			}
+			
+			popup.checks = {}
+			for i, ch in ipairs(channels) do
+				local check = CreateCheckBox(popup)
+				check:SetPoint("TOPLEFT", 20, -30 - (i-1)*25)
+				check:SetChecked(KeywordMonitorDB.Channels[ch.key])
+				
+				local label = CreateFS(popup, 12, ch.label, false, "LEFT")
+				label:SetPoint("LEFT", check, "RIGHT", 5, 0)
+				
+				check:SetScript("OnClick", function(self)
+					KeywordMonitorDB.Channels[ch.key] = self:GetChecked()
+					-- 重新注册过滤器
+					if KeywordMonitorDB.Enabled then
+						KM:ToggleKeywordMonitor(false)
+						KM:ToggleKeywordMonitor(true)
+					end
+				end)
+				
+				popup.checks[ch.key] = check
+			end
+			
+			local closeBtn = CreateButton(popup, 60, 20, "关闭")
+			closeBtn:SetPoint("BOTTOM", 0, 10)
+			closeBtn:SetScript("OnClick", function() popup:Hide() end)
+			
+			frame.channelPopup = popup
+		end
+		
+		if frame.channelPopup:IsShown() then
+			frame.channelPopup:Hide()
+		else
+			frame.channelPopup:Show()
+		end
+	end)
+	
+	-- 黑名单管理按钮
+	local blacklistBtn = CreateButton(frame, 120, 25, "黑名单管理")
+	blacklistBtn:SetPoint("LEFT", channelBtn, "RIGHT", 10, 0)
+	blacklistBtn:SetScript("OnClick", function()
+		-- 创建黑名单管理弹窗
+		if not frame.blacklistPopup then
+			local popup = CreateFrame("Frame", nil, frame, "BackdropTemplate")
+			popup:SetSize(300, 350)
+			popup:SetPoint("CENTER", frame, "CENTER", 130, 0)
+			popup:SetFrameLevel(frame:GetFrameLevel() + 10)
+			
+			if KeywordMonitorDB.UseNDuiStyle then
+				popup:SetBackdrop({
+					bgFile = "Interface\\Buttons\\WHITE8X8",
+					edgeFile = "Interface\\Buttons\\WHITE8X8",
+					edgeSize = 1,
+				})
+				popup:SetBackdropColor(0, 0, 0, 0.9)
+				popup:SetBackdropBorderColor(0, 0, 0, 1)
+			else
+				popup:SetBackdrop({
+					bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+					edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+					tile = true,
+					tileSize = 16,
+					edgeSize = 12,
+					insets = { left = 2, right = 2, top = 2, bottom = 2 }
+				})
+			end
+			
+			popup:Hide()
+			
+			local popupTitle = CreateFS(popup, 14, "黑名单管理", true)
+			popupTitle:SetPoint("TOP", 0, -10)
+			
+			-- 玩家黑名单
+			local playerLabel = CreateFS(popup, 13, "玩家黑名单:", false, "LEFT")
+			playerLabel:SetPoint("TOPLEFT", 15, -35)
+			
+			local playerInput = CreateEditBox(popup, 180, 25)
+			playerInput:SetPoint("TOPLEFT", 15, -55)
+			
+			local playerAddBtn = CreateButton(popup, 60, 25, "添加")
+			playerAddBtn:SetPoint("LEFT", playerInput, "RIGHT", 5, 0)
+			playerAddBtn:SetScript("OnClick", function()
+				local name = playerInput:GetText()
+				if name and name ~= "" then
+					KeywordMonitorDB.Blacklist.Players[name] = true
+					playerInput:SetText("")
+					print("|cff00FF00[ChatKeyword]|r 已将 |cffFFFF00" .. name .. "|r 加入玩家黑名单")
+					-- 刷新列表
+					if popup.playerList then
+						popup.playerList:SetText(table.concat(KM:GetBlacklistPlayers(), "\n"))
+					end
+				end
+			end)
+			
+			local playerListScroll = CreateFrame("ScrollFrame", nil, popup)
+			playerListScroll:SetSize(260, 80)
+			playerListScroll:SetPoint("TOPLEFT", 15, -85)
+			
+			local playerList = CreateFrame("EditBox", nil, playerListScroll)
+			playerList:SetMultiLine(true)
+			playerList:SetAutoFocus(false)
+			playerList:SetFontObject(ChatFontNormal)
+			playerList:SetWidth(260)
+			playerListScroll:SetScrollChild(playerList)
+			popup.playerList = playerList
+			
+			local playerClearBtn = CreateButton(popup, 100, 20, "清空玩家黑名单")
+			playerClearBtn:SetPoint("TOPLEFT", 15, -170)
+			playerClearBtn:SetScript("OnClick", function()
+				KeywordMonitorDB.Blacklist.Players = {}
+				playerList:SetText("")
+				print("|cff00FF00[ChatKeyword]|r 已清空玩家黑名单")
+			end)
+			
+			-- 关键词黑名单
+			local keywordLabel = CreateFS(popup, 13, "关键词黑名单:", false, "LEFT")
+			keywordLabel:SetPoint("TOPLEFT", 15, -200)
+			
+			local keywordInput = CreateEditBox(popup, 180, 25)
+			keywordInput:SetPoint("TOPLEFT", 15, -220)
+			
+			local keywordAddBtn = CreateButton(popup, 60, 25, "添加")
+			keywordAddBtn:SetPoint("LEFT", keywordInput, "RIGHT", 5, 0)
+			keywordAddBtn:SetScript("OnClick", function()
+				local kw = keywordInput:GetText()
+				if kw and kw ~= "" then
+					KeywordMonitorDB.Blacklist.Keywords[kw] = true
+					keywordInput:SetText("")
+					print("|cff00FF00[ChatKeyword]|r 已将 |cffFFFF00" .. kw .. "|r 加入关键词黑名单")
+					-- 刷新列表
+					if popup.keywordList then
+						popup.keywordList:SetText(table.concat(KM:GetBlacklistKeywords(), "\n"))
+					end
+				end
+			end)
+			
+			local keywordListScroll = CreateFrame("ScrollFrame", nil, popup)
+			keywordListScroll:SetSize(260, 50)
+			keywordListScroll:SetPoint("TOPLEFT", 15, -250)
+			
+			local keywordList = CreateFrame("EditBox", nil, keywordListScroll)
+			keywordList:SetMultiLine(true)
+			keywordList:SetAutoFocus(false)
+			keywordList:SetFontObject(ChatFontNormal)
+			keywordList:SetWidth(260)
+			keywordListScroll:SetScrollChild(keywordList)
+			popup.keywordList = keywordList
+			
+			local keywordClearBtn = CreateButton(popup, 120, 20, "清空关键词黑名单")
+			keywordClearBtn:SetPoint("TOPLEFT", 15, -305)
+			keywordClearBtn:SetScript("OnClick", function()
+				KeywordMonitorDB.Blacklist.Keywords = {}
+				keywordList:SetText("")
+				print("|cff00FF00[ChatKeyword]|r 已清空关键词黑名单")
+			end)
+			
+			local closeBtn = CreateButton(popup, 60, 20, "关闭")
+			closeBtn:SetPoint("BOTTOM", 0, 10)
+			closeBtn:SetScript("OnClick", function() popup:Hide() end)
+			
+			-- 显示时刷新列表
+			popup:SetScript("OnShow", function(self)
+				playerList:SetText(table.concat(KM:GetBlacklistPlayers(), "\n"))
+				keywordList:SetText(table.concat(KM:GetBlacklistKeywords(), "\n"))
+			end)
+			
+			frame.blacklistPopup = popup
+		end
+		
+		if frame.blacklistPopup:IsShown() then
+			frame.blacklistPopup:Hide()
+		else
+			frame.blacklistPopup:Show()
+		end
+	end)
+	
 	-- NDui 美化开关（始终可用）
 	local nduiCheck = CreateCheckBox(frame)
-	nduiCheck:SetPoint("TOPLEFT", 20, -290)
+	nduiCheck:SetPoint("TOPLEFT", 20, -325)
 	nduiCheck:SetChecked(KeywordMonitorDB.UseNDuiStyle)
 	local nduiLabel = CreateFS(frame, 13, "使用 NDui 美化风格", false, "LEFT")
 	nduiLabel:SetPoint("LEFT", nduiCheck, "RIGHT", 5, 0)
@@ -717,10 +1022,10 @@ local function CreateConfigFrame()
 	end)
 	
 	local outputLabel = CreateFS(frame, 14, "输出方式:", false, "LEFT")
-	outputLabel:SetPoint("TOPLEFT", 20, -320)
+	outputLabel:SetPoint("TOPLEFT", 20, -355)
 	
 	local systemRadio = CreateCheckBox(frame)
-	systemRadio:SetPoint("TOPLEFT", 40, -345)
+	systemRadio:SetPoint("TOPLEFT", 40, -380)
 	systemRadio:SetChecked(KeywordMonitorDB.OutputMode == 1)
 	local systemLabel = CreateFS(frame, 13, "系统聊天窗口", false, "LEFT")
 	systemLabel:SetPoint("LEFT", systemRadio, "RIGHT", 5, 0)
@@ -732,7 +1037,7 @@ local function CreateConfigFrame()
 	independentLabel:SetPoint("LEFT", independentRadio, "RIGHT", 5, 0)
 	
 	local chatFrameLabel = CreateFS(frame, 13, "输出到聊天窗口", false, "LEFT")
-	chatFrameLabel:SetPoint("TOPLEFT", 60, -375)
+	chatFrameLabel:SetPoint("TOPLEFT", 60, -410)
 	
 	local chatFrameDropdown = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 	chatFrameDropdown:SetSize(150, 30)
@@ -875,7 +1180,7 @@ local function CreateConfigFrame()
 	end)
 	
 	local flashCheck = CreateCheckBox(frame)
-	flashCheck:SetPoint("TOPLEFT", 60, -405)
+	flashCheck:SetPoint("TOPLEFT", 60, -440)
 	flashCheck:SetChecked(KeywordMonitorDB.FlashOnMatch)
 	local flashLabel = CreateFS(frame, 13, "提取成功窗口标签闪动", false, "LEFT")
 	flashLabel:SetPoint("LEFT", flashCheck, "RIGHT", 5, 0)
@@ -886,7 +1191,7 @@ local function CreateConfigFrame()
 	end)
 	
 	local combatHideCheck = CreateCheckBox(frame)
-	combatHideCheck:SetPoint("TOPLEFT", 60, -435)
+	combatHideCheck:SetPoint("TOPLEFT", 60, -470)
 	combatHideCheck:SetChecked(KeywordMonitorDB.CombatHide)
 	local combatHideLabel = CreateFS(frame, 13, "战斗中隐藏独立窗口", false, "LEFT")
 	combatHideLabel:SetPoint("LEFT", combatHideCheck, "RIGHT", 5, 0)
@@ -913,6 +1218,10 @@ local function CreateConfigFrame()
 			audioText:Show()
 			inheritCheck:Show()
 			inheritLabel:Show()
+			
+			-- 频道选择和黑名单按钮
+			channelBtn:Show()
+			blacklistBtn:Show()
 			
 			-- NDui 美化开关（始终显示）
 			nduiCheck:Show()
@@ -953,6 +1262,10 @@ local function CreateConfigFrame()
 			audioText:Hide()
 			inheritCheck:Hide()
 			inheritLabel:Hide()
+			
+			-- 频道选择和黑名单按钮
+			channelBtn:Hide()
+			blacklistBtn:Hide()
 			
 			-- NDui 美化开关
 			nduiCheck:Hide()
@@ -1175,6 +1488,28 @@ function KM:CreateKeywordButton()
 	keywordButton = bu
 	UpdateButtonStatus()
 	return bu
+end
+
+-- 获取玩家黑名单列表
+function KM:GetBlacklistPlayers()
+	EnsureConfig()
+	local list = {}
+	for name, _ in pairs(KeywordMonitorDB.Blacklist.Players) do
+		tinsert(list, name)
+	end
+	table.sort(list)
+	return list
+end
+
+-- 获取关键词黑名单列表
+function KM:GetBlacklistKeywords()
+	EnsureConfig()
+	local list = {}
+	for keyword, _ in pairs(KeywordMonitorDB.Blacklist.Keywords) do
+		tinsert(list, keyword)
+	end
+	table.sort(list)
+	return list
 end
 
 -- 初始化
