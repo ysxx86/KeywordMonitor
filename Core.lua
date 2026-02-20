@@ -380,21 +380,57 @@ end
 local function IsRepeatMessage(text)
 	local currentTime = GetTime()
 	
-	-- 清理过期的缓存（60秒前的）
-	for cachedText, timestamp in pairs(repeatMessageCache) do
-		if currentTime - timestamp > 60 then
-			repeatMessageCache[cachedText] = nil
+	-- 限制缓存大小，最多100条
+	local cacheSize = 0
+	for _ in pairs(repeatMessageCache) do
+		cacheSize = cacheSize + 1
+	end
+	
+	if cacheSize > 100 then
+		-- 清理所有过期的（超过60秒）
+		for cachedText, timestamp in pairs(repeatMessageCache) do
+			if currentTime - timestamp > 60 then
+				repeatMessageCache[cachedText] = nil
+			end
+		end
+		
+		-- 如果还是太多，清理所有（重置）
+		cacheSize = 0
+		for _ in pairs(repeatMessageCache) do
+			cacheSize = cacheSize + 1
+		end
+		
+		if cacheSize > 100 then
+			repeatMessageCache = {}
 		end
 	end
 	
 	-- 检查是否重复
 	if repeatMessageCache[text] then
+		-- 更新时间戳
+		repeatMessageCache[text] = currentTime
 		return true
 	end
 	
 	-- 添加到缓存
 	repeatMessageCache[text] = currentTime
 	return false
+end
+
+-- 清理重复消息缓存（定时调用）
+local function CleanRepeatMessageCache()
+	local currentTime = GetTime()
+	local cleaned = 0
+	
+	for text, timestamp in pairs(repeatMessageCache) do
+		-- 清理超过3分钟的（从60秒改为180秒）
+		if currentTime - timestamp > 180 then
+			repeatMessageCache[text] = nil
+			cleaned = cleaned + 1
+		end
+	end
+	
+	return cleaned
 end
 
 -- 工具函数：分割字符串
@@ -767,25 +803,29 @@ end
 function KM:OptimizeMemory()
 	EnsureConfig()
 	
+	local cleaned = 0
+	
 	-- 1. 限制历史记录
 	if #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount then
 		while #KeywordMonitorDB.History > KeywordMonitorDB.HistoryMaxCount do
 			tremove(KeywordMonitorDB.History)
+			cleaned = cleaned + 1
 		end
 	end
 	
-	-- 2. 清理智能学习低频词（出现次数<2）
+	-- 2. 清理智能学习低频词（出现次数<3，更严格）
 	local wordCount = 0
 	for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-		if count < 2 then
+		if count < 3 then  -- 从2改为3
 			KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
+			cleaned = cleaned + 1
 		else
 			wordCount = wordCount + 1
 		end
 	end
 	
-	-- 如果词频表还是太大，只保留高频词
-	if wordCount > 200 then
+	-- 如果词频表还是太大，只保留高频词（从200改为150）
+	if wordCount > 150 then
 		local words = {}
 		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
 			tinsert(words, {word = word, count = count})
@@ -793,16 +833,18 @@ function KM:OptimizeMemory()
 		table.sort(words, function(a, b) return a.count > b.count end)
 		
 		KeywordMonitorDB.SmartLearning.WordFrequency = {}
-		for i = 1, math.min(200, #words) do
+		for i = 1, math.min(150, #words) do
 			KeywordMonitorDB.SmartLearning.WordFrequency[words[i].word] = words[i].count
 		end
+		cleaned = cleaned + (wordCount - 150)
 	end
 	
-	-- 3. 清理关键词关联低频数据（关联次数<3）
+	-- 3. 清理关键词关联低频数据（关联次数<5，更严格）
 	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
 		for kw2, count in pairs(correlations) do
-			if count < 3 then
+			if count < 5 then  -- 从3改为5
 				correlations[kw2] = nil
+				cleaned = cleaned + 1
 			end
 		end
 		if KM:GetTableSize(correlations) == 0 then
@@ -810,16 +852,26 @@ function KM:OptimizeMemory()
 		end
 	end
 	
-	-- 4. 清理重复消息缓存（超过5分钟的）
-	local currentTime = GetTime()
-	for text, timestamp in pairs(repeatMessageCache) do
-		if currentTime - timestamp > 300 then
-			repeatMessageCache[text] = nil
+	-- 4. 清理重复消息缓存
+	local cacheCleared = CleanRepeatMessageCache()
+	cleaned = cleaned + cacheCleared
+	
+	-- 5. 清理趋势数据中的低频关键词
+	for dateStr, data in pairs(KeywordMonitorDB.TrendData.Daily) do
+		if data.keywords then
+			for kw, count in pairs(data.keywords) do
+				if count < 2 then
+					data.keywords[kw] = nil
+					cleaned = cleaned + 1
+				end
+			end
 		end
 	end
 	
-	-- 5. 强制垃圾回收
+	-- 6. 强制垃圾回收
 	collectgarbage("collect")
+	
+	return cleaned
 end
 
 -- 检查是否需要显示更新日志
@@ -1982,11 +2034,17 @@ function KM:AddToHistory(record)
 	EnsureConfig()
 	
 	-- 只保存必要的字段，减少内存占用
+	-- 消息内容限制在100字符以内
+	local msg = record.msg
+	if #msg > 100 then
+		msg = sub(msg, 1, 100) .. "..."
+	end
+	
 	local simpleRecord = {
 		time = record.time,
 		timeStr = record.timeStr,
 		name = record.name,
-		msg = record.msg,
+		msg = msg,  -- 限制长度
 		channelName = record.channelName,
 		-- 不保存完整的消息对象和其他冗余数据
 	}
@@ -2815,11 +2873,32 @@ function KM:UpdateTrendData(keywords, time)
 	
 	KeywordMonitorDB.TrendData.Daily[dateStr].total = KeywordMonitorDB.TrendData.Daily[dateStr].total + 1
 	
+	-- 限制每日数据的关键词数量（最多保留前20个）
+	local dailyKeywords = KeywordMonitorDB.TrendData.Daily[dateStr].keywords
 	for _, kw in ipairs(keywords) do
-		if not KeywordMonitorDB.TrendData.Daily[dateStr].keywords[kw] then
-			KeywordMonitorDB.TrendData.Daily[dateStr].keywords[kw] = 0
+		if not dailyKeywords[kw] then
+			-- 检查是否已经有20个关键词
+			local count = 0
+			for _ in pairs(dailyKeywords) do
+				count = count + 1
+			end
+			
+			if count >= 20 then
+				-- 找出最少的关键词并删除
+				local minKw, minCount = nil, math.huge
+				for k, c in pairs(dailyKeywords) do
+					if c < minCount then
+						minKw, minCount = k, c
+					end
+				end
+				if minKw then
+					dailyKeywords[minKw] = nil
+				end
+			end
+			
+			dailyKeywords[kw] = 0
 		end
-		KeywordMonitorDB.TrendData.Daily[dateStr].keywords[kw] = KeywordMonitorDB.TrendData.Daily[dateStr].keywords[kw] + 1
+		dailyKeywords[kw] = dailyKeywords[kw] + 1
 	end
 	
 	-- 更新每小时数据
@@ -2832,11 +2911,30 @@ function KM:UpdateTrendData(keywords, time)
 	
 	KeywordMonitorDB.TrendData.Hourly[hourStr].total = KeywordMonitorDB.TrendData.Hourly[hourStr].total + 1
 	
+	-- 限制每小时数据的关键词数量（最多保留前10个）
+	local hourlyKeywords = KeywordMonitorDB.TrendData.Hourly[hourStr].keywords
 	for _, kw in ipairs(keywords) do
-		if not KeywordMonitorDB.TrendData.Hourly[hourStr].keywords[kw] then
-			KeywordMonitorDB.TrendData.Hourly[hourStr].keywords[kw] = 0
+		if not hourlyKeywords[kw] then
+			local count = 0
+			for _ in pairs(hourlyKeywords) do
+				count = count + 1
+			end
+			
+			if count >= 10 then
+				local minKw, minCount = nil, math.huge
+				for k, c in pairs(hourlyKeywords) do
+					if c < minCount then
+						minKw, minCount = k, c
+					end
+				end
+				if minKw then
+					hourlyKeywords[minKw] = nil
+				end
+			end
+			
+			hourlyKeywords[kw] = 0
 		end
-		KeywordMonitorDB.TrendData.Hourly[hourStr].keywords[kw] = KeywordMonitorDB.TrendData.Hourly[hourStr].keywords[kw] + 1
+		hourlyKeywords[kw] = hourlyKeywords[kw] + 1
 	end
 	
 	-- 清理旧的小时数据（保留最近48小时）
@@ -2844,9 +2942,32 @@ function KM:UpdateTrendData(keywords, time)
 	for hourKey, _ in pairs(KeywordMonitorDB.TrendData.Hourly) do
 		local year, month, day, hour = hourKey:match("(%d+)-(%d+)-(%d+)-(%d+)")
 		if year and month and day and hour then
-			local dataTime = os.time({year = year, month = month, day = day, hour = hour, min = 0, sec = 0})
+			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = tonumber(hour), min = 0, sec = 0})
 			if currentTime - dataTime > 48 * 3600 then
 				KeywordMonitorDB.TrendData.Hourly[hourKey] = nil
+			end
+		end
+	end
+	
+	-- 清理超过30天的每日数据
+	for dateKey, _ in pairs(KeywordMonitorDB.TrendData.Daily) do
+		local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
+		if year and month and day then
+			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+			if currentTime - dataTime > 30 * 86400 then
+				KeywordMonitorDB.TrendData.Daily[dateKey] = nil
+			end
+		end
+	end
+	
+	-- 对于7-30天的数据，只保留总数，删除关键词明细
+	for dateKey, data in pairs(KeywordMonitorDB.TrendData.Daily) do
+		local year, month, day = dateKey:match("(%d+)-(%d+)-(%d+)")
+		if year and month and day then
+			local dataTime = os.time({year = tonumber(year), month = tonumber(month), day = tonumber(day), hour = 0, min = 0, sec = 0})
+			if currentTime - dataTime > 7 * 86400 and currentTime - dataTime <= 30 * 86400 then
+				-- 只保留总数
+				data.keywords = {}
 			end
 		end
 	end
@@ -2859,13 +2980,18 @@ function KM:UpdateKeywordCorrelation(keywords)
 	-- 如果只有一个关键词，无需记录关联
 	if #keywords < 2 then return end
 	
-	-- 限制关联表大小
-	local maxKeywords = 50
-	if KM:GetTableSize(KeywordMonitorDB.KeywordCorrelation) > maxKeywords then
-		-- 清理关联次数<3的数据
+	-- 限制关联表大小 - 更激进的限制
+	local totalCorrelations = 0
+	for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
+		totalCorrelations = totalCorrelations + KM:GetTableSize(correlations)
+	end
+	
+	-- 如果总关联数超过100，清理低频数据
+	if totalCorrelations > 100 then
 		for kw1, correlations in pairs(KeywordMonitorDB.KeywordCorrelation) do
 			for kw2, count in pairs(correlations) do
-				if count < 3 then
+				-- 清理关联次数<5的数据（更严格）
+				if count < 5 then
 					correlations[kw2] = nil
 				end
 			end
@@ -2884,15 +3010,34 @@ function KM:UpdateKeywordCorrelation(keywords)
 			KeywordMonitorDB.KeywordCorrelation[kw1] = {}
 		end
 		
+		-- 限制每个关键词最多10个关联
+		local correlations = KeywordMonitorDB.KeywordCorrelation[kw1]
+		local correlationCount = KM:GetTableSize(correlations)
+		
 		for j = 1, #keywords do
 			if i ~= j then
 				local kw2 = keywords[j]
 				
-				if not KeywordMonitorDB.KeywordCorrelation[kw1][kw2] then
-					KeywordMonitorDB.KeywordCorrelation[kw1][kw2] = 0
+				if not correlations[kw2] then
+					-- 如果已经有10个关联，删除最少的
+					if correlationCount >= 10 then
+						local minKw, minCount = nil, math.huge
+						for k, c in pairs(correlations) do
+							if c < minCount then
+								minKw, minCount = k, c
+							end
+						end
+						if minKw then
+							correlations[minKw] = nil
+						end
+					else
+						correlationCount = correlationCount + 1
+					end
+					
+					correlations[kw2] = 0
 				end
 				
-				KeywordMonitorDB.KeywordCorrelation[kw1][kw2] = KeywordMonitorDB.KeywordCorrelation[kw1][kw2] + 1
+				correlations[kw2] = correlations[kw2] + 1
 			end
 		end
 	end
@@ -3009,12 +3154,19 @@ function KM:LearnFromMessage(msg)
 		return
 	end
 	
+	-- 采样策略：只学习20%的消息，减少处理量
+	if math.random(100) > 20 then
+		return
+	end
+	
 	-- 限制词频表大小，避免无限增长
-	local maxWords = 200
-	if self:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency) > maxWords then
-		-- 清理低频词（出现次数<2的）
+	local maxWords = 150  -- 从200降低到150
+	local currentWordCount = KM:GetTableSize(KeywordMonitorDB.SmartLearning.WordFrequency)
+	
+	if currentWordCount > maxWords then
+		-- 清理低频词（出现次数<3，更严格）
 		for word, count in pairs(KeywordMonitorDB.SmartLearning.WordFrequency) do
-			if count < 2 then
+			if count < 3 then
 				KeywordMonitorDB.SmartLearning.WordFrequency[word] = nil
 			end
 		end
@@ -3024,39 +3176,60 @@ function KM:LearnFromMessage(msg)
 	local cleanMsg = CleanText(msg)
 	
 	-- 限制消息长度，避免处理过长消息
-	if #cleanMsg > 200 then
-		cleanMsg = sub(cleanMsg, 1, 200)
+	if #cleanMsg > 100 then  -- 从200降低到100
+		cleanMsg = sub(cleanMsg, 1, 100)
 	end
 	
+	-- 常见无意义词列表（中文停用词）
+	local stopWords = {
+		["的"] = true, ["了"] = true, ["是"] = true, ["在"] = true,
+		["我"] = true, ["有"] = true, ["和"] = true, ["就"] = true,
+		["不"] = true, ["人"] = true, ["都"] = true, ["一"] = true,
+		["个"] = true, ["上"] = true, ["也"] = true, ["很"] = true,
+		["到"] = true, ["说"] = true, ["要"] = true, ["去"] = true,
+		["你"] = true, ["会"] = true, ["着"] = true, ["没"] = true,
+		["看"] = true, ["好"] = true, ["自"] = true, ["己"] = true,
+	}
+	
 	-- 提取2-4个字符的词汇（中文通常是2-4个字）
+	local extractedWords = {}
+	
 	for i = 1, #cleanMsg do
 		-- 提取2字词
 		if i + 1 <= #cleanMsg then
 			local word = sub(cleanMsg, i, i + 1)
-			if #word >= 2 then
-				KM:RecordWord(word)
+			if #word >= 2 and not stopWords[word] then
+				extractedWords[word] = true
 			end
 		end
 		
 		-- 提取3字词
 		if i + 2 <= #cleanMsg then
 			local word = sub(cleanMsg, i, i + 2)
-			if #word >= 3 then
-				KM:RecordWord(word)
+			if #word >= 3 and not stopWords[word] then
+				extractedWords[word] = true
 			end
 		end
 		
 		-- 提取4字词
 		if i + 3 <= #cleanMsg then
 			local word = sub(cleanMsg, i, i + 3)
-			if #word >= 4 then
-				KM:RecordWord(word)
+			if #word >= 4 and not stopWords[word] then
+				extractedWords[word] = true
 			end
 		end
 	end
 	
-	-- 检查是否需要显示建议
-	KM:CheckAndShowSuggestions()
+	-- 记录词频（去重后）
+	for word, _ in pairs(extractedWords) do
+		KM:RecordWord(word)
+	end
+	
+	-- 检查是否需要显示建议（降低频率）
+	-- 只在词频表有足够数据时才检查
+	if currentWordCount > 50 then
+		KM:CheckAndShowSuggestions()
+	end
 end
 
 -- 获取表大小
@@ -5233,6 +5406,11 @@ function KM:Init()
 		-- 每小时优化一次内存
 		C_Timer.NewTicker(3600, function()
 			KM:OptimizeMemory()
+		end)
+		
+		-- 每5分钟清理一次重复消息缓存
+		C_Timer.NewTicker(300, function()
+			CleanRepeatMessageCache()
 		end)
 	end)
 	
