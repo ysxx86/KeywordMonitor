@@ -4,7 +4,30 @@
 ## Notes: 聊天关键词提取过滤插件
 ## Notes-enUS: Chat keyword extraction and filtering
 ## Author: 专业打地鼠
-## Version: 1.7.2
+## Version: 2.0.0
 ## SavedVariables: KeywordMonitorDB
 
+# 模块加载顺序 (按依赖关系排序)
+# Module loading order (sorted by dependencies)
+
+# 1. 工具函数模块 (Utils Module)
+Modules\Utils.lua
+
+# 2. 配置管理模块 (Config Module)
+Modules\Config.lua
+
+# 3. 核心功能模块 (Core Module)
+Modules\Core.lua
+
+# 4. 功能模块 (Functional Modules)
+Modules\UI.lua
+Modules\Blacklist.lua
+Modules\Groups.lua
+Modules\QuickReply.lua
+Modules\Statistics.lua
+Modules\History.lua
+Modules\Presets.lua
+Modules\ImportExport.lua
+
+# 5. 主入口文件 (Main Entry Point)
 Core.lua
