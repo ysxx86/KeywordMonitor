@@ -13,13 +13,16 @@
 # 1. 工具函数模块 (Utils Module)
 Modules\Utils.lua
 
-# 2. 配置管理模块 (Config Module)
+# 2. 别名映射模块 (Aliases Module)
+Modules\Aliases.lua
+
+# 3. 配置管理模块 (Config Module)
 Modules\Config.lua
 
-# 3. 核心功能模块 (Core Module)
+# 4. 核心功能模块 (Core Module)
 Modules\Core.lua
 
-# 4. 功能模块 (Functional Modules)
+# 5. 功能模块 (Functional Modules)
 Modules\UI.lua
 Modules\Blacklist.lua
 Modules\Groups.lua
@@ -29,5 +32,5 @@ Modules\History.lua
 Modules\Presets.lua
 Modules\ImportExport.lua
 
-# 5. 主入口文件 (Main Entry Point)
+# 6. 主入口文件 (Main Entry Point)
 Core.lua

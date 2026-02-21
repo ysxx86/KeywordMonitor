@@ -40,12 +40,13 @@ KM.Core = {}
 local Core = KM.Core
 
 -- 引用依赖模块（延迟加载）
-local Utils, Config
+local Utils, Config, Aliases
 
 local function LoadDependencies()
 	if not Utils then
 		Utils = KM.Utils
 		Config = KM.Config
+		Aliases = KM.Aliases
 		
 		-- 依赖检查
 		if not Utils then
@@ -53,6 +54,9 @@ local function LoadDependencies()
 		end
 		if not Config then
 			error("KeywordMonitor Core 模块需要 Config 模块先加载")
+		end
+		if not Aliases then
+			error("KeywordMonitor Core 模块需要 Aliases 模块先加载")
 		end
 	end
 end
@@ -142,6 +146,20 @@ local configFrame = nil  -- 配置界面引用
     核心功能函数（占位符 - 待后续任务实现）
 ============================================]]--
 
+-- 辅助函数：扩展单个关键词为包含所有别名的数组
+-- @param keyword string 原始关键词
+-- @return table 包含原始关键词和所有别名的数组
+local function ExpandSingleKeyword(keyword)
+	LoadDependencies()
+	
+	if not Aliases or not Aliases.ExpandKeyword then
+		-- 如果别名模块未加载，返回原始关键词
+		return {upper(keyword)}
+	end
+	
+	return Aliases.ExpandKeyword(keyword)
+end
+
 -- 更新关键词列表
 -- @param keywordStr string 关键词字符串（可选，传统模式使用）
 -- @return void
@@ -203,7 +221,11 @@ function Core.UpdateKeywordList(keywordStr)
 						end
 					else
 						local upperWord = upper(word)
-						tinsert(keywords, upperWord)
+						-- 扩展关键词别名
+						local expandedKeywords = ExpandSingleKeyword(upperWord)
+						for _, expandedWord in ipairs(expandedKeywords) do
+							tinsert(keywords, expandedWord)
+						end
 					end
 				end
 			end
@@ -261,7 +283,11 @@ function Core.UpdateKeywordList(keywordStr)
 			end
 		else
 			local upperWord = upper(word)
-			tinsert(keywords, upperWord)
+			-- 扩展关键词别名
+			local expandedKeywords = ExpandSingleKeyword(upperWord)
+			for _, expandedWord in ipairs(expandedKeywords) do
+				tinsert(keywords, expandedWord)
+			end
 		end
 	end
 end
