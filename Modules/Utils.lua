@@ -630,7 +630,7 @@ function Utils.CreateCloseButton(parent)
 	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
 	
 	local btn = CreateFrame("Button", nil, parent)
-	btn:SetSize(16, 16)
+	btn:SetSize(32, 32)  -- 改为32x32，更大更容易点击
 	
 	if useNDui then
 		-- NDui 风格关闭按钮

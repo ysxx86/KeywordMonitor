@@ -147,12 +147,12 @@ function UI.CreateConfigFrame()
 		-- 使用完整的 NDui 风格美化（带阴影和纹理）
 		Utils.SetBD(frame)
 	else
-		-- 使用暴雪原生UI背景和边框
+		-- 使用暴雪原生UI背景和边框（集结号风格）
 		frame:SetBackdrop({
-			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+			bgFile = "Interface\\FrameGeneral\\UI-Background-Rock",
 			edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 			tile = true,
-			tileSize = 32,
+			tileSize = 256,
 			edgeSize = 32,
 			insets = { left = 11, right = 12, top = 12, bottom = 11 }
 		})
@@ -200,7 +200,7 @@ function UI.CreateConfigFrame()
 	end)
 	
 	local closeBtn = Utils.CreateCloseButton(frame)
-	closeBtn:SetPoint("TOPRIGHT", -10, -10)
+	closeBtn:SetPoint("TOPRIGHT", -15, -15)  -- 从-10,-10改为-15,-15，更宽松
 	closeBtn:SetScript("OnClick", function() frame:Hide() end)
 	
 	local enableCheck = Utils.CreateCheckBox(frame)
@@ -1164,11 +1164,12 @@ function UI.ShowWelcomeDialog(currentVersion, lastVersion, author)
 	if useNDui then
 		Utils.SetBD(dialog)
 	else
+		-- 使用暴雪原生UI风格（集结号风格）
 		dialog:SetBackdrop({
-			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+			bgFile = "Interface\\FrameGeneral\\UI-Background-Rock",
 			edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
 			tile = true,
-			tileSize = 32,
+			tileSize = 256,
 			edgeSize = 32,
 			insets = { left = 11, right = 12, top = 12, bottom = 11 }
 		})
