@@ -537,10 +537,25 @@ function Utils.CreateButton(parent, width, height, text)
 		btn:SetPushedTexture("Interface\\Buttons\\UI-Panel-Button-Down")
 		btn:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
 		
+		-- 获取纹理并设置正确的坐标
+		local normalTexture = btn:GetNormalTexture()
+		if normalTexture then
+			normalTexture:SetTexCoord(0, 0.625, 0, 0.6875)
+		end
+		local pushedTexture = btn:GetPushedTexture()
+		if pushedTexture then
+			pushedTexture:SetTexCoord(0, 0.625, 0, 0.6875)
+		end
+		local highlightTexture = btn:GetHighlightTexture()
+		if highlightTexture then
+			highlightTexture:SetTexCoord(0, 0.625, 0, 0.6875)
+			highlightTexture:SetBlendMode("ADD")
+		end
+		
 		local fs = btn:CreateFontString(nil, "OVERLAY")
 		fs:SetFont(STANDARD_TEXT_FONT, 13)
 		fs:SetText(text or "")
-		fs:SetPoint("CENTER")
+		fs:SetPoint("CENTER", 0, 0)
 		btn:SetFontString(fs)
 	end
 	
@@ -581,7 +596,8 @@ end
 function Utils.CreateEditBox(parent, width, height)
 	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
 	
-	local eb = CreateFrame("EditBox", nil, parent)
+	-- 创建 EditBox 时添加 BackdropTemplate 支持
+	local eb = CreateFrame("EditBox", nil, parent, "BackdropTemplate")
 	eb:SetSize(width, height)
 	eb:SetAutoFocus(false)
 	eb:SetFontObject(ChatFontNormal)
