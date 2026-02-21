@@ -60,39 +60,23 @@ end
 
 -- 显示更新日志
 function KM:ShowUpdateLog(currentVersion, lastVersion)
-	local isFirstInstall = lastVersion == ""
-	
-	if isFirstInstall then
-		print("|cff00FF00===========================================|r")
-		print("|cff00FF00[ChatKeyword]|r 欢迎使用聊天关键词提取过滤插件！")
-		print("|cff00FF00当前版本：|r v" .. currentVersion)
-		print("|cff00FF00作者：|r " .. addonAuthor)
-		print("|cff00FF00===========================================|r")
-		print("|cffFFFF00使用说明：|r")
-		print("  /keyword - 打开配置界面")
-		print("  /keyword on - 开启监控")
-		print("  /keyword off - 关闭监控")
-		print("|cffFFFF00主要功能：|r")
-		print("  • 关键词分组管理")
-		print("  • 预设方案一键应用")
-		print("  • 导入/导出配置")
-		print("  • 趋势分析和关联分析")
-		print("  • 历史记录和快速回复")
-		print("|cff00FF00===========================================|r")
+	-- 调用 UI 模块显示欢迎/更新对话框
+	if KM.UI and KM.UI.ShowWelcomeDialog then
+		KM.UI.ShowWelcomeDialog(currentVersion, lastVersion, addonAuthor)
 	else
-		print("|cff00FF00===========================================|r")
-		print("|cff00FF00[ChatKeyword]|r 插件已更新！")
-		print("|cff00FF00当前版本：|r v" .. currentVersion .. " |cff808080(上次: v" .. lastVersion .. ")|r")
-		print("|cff00FF00===========================================|r")
-		print("|cffFFFF00v2.0.0 更新内容：|r")
-		print("  • 完成代码模块化重构")
-		print("  • 将 6000+ 行代码拆分为 11 个独立模块")
-		print("  • 新增职业染色开关功能")
-		print("  • 提高代码可维护性和可扩展性")
-		print("  • 优化模块加载顺序和性能")
-		print("  • 保持所有原有功能不变")
-		print("  • 保持数据完全兼容")
-		print("|cff00FF00===========================================|r")
+		-- 如果 UI 模块未加载，回退到聊天打印
+		local isFirstInstall = lastVersion == ""
+		
+		if isFirstInstall then
+			print("|cff00FF00===========================================|r")
+			print("|cff00FF00[KeywordMonitor]|r 欢迎使用关键词监控插件！")
+			print("|cff00FF00当前版本：|r v" .. currentVersion)
+			print("|cff00FF00作者：|r " .. addonAuthor)
+			print("|cff00FF00===========================================|r")
+			print("|cffFFFF00使用说明：|r /km 打开配置界面")
+		else
+			print("|cff00FF00[KeywordMonitor]|r 插件已更新到 v" .. currentVersion)
+		end
 	end
 end
 

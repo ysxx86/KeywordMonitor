@@ -168,10 +168,36 @@ function UI.CreateConfigFrame()
 	local title = Utils.CreateFS(frame, 16, "聊天关键词提取过滤", true)
 	title:SetPoint("TOP", 0, -10)
 	
-	-- 版本号和作者
-	local versionText = Utils.CreateFS(frame, 9, "v2.0.0 by 专业打地鼠", false, "RIGHT")
-	versionText:SetPoint("TOPRIGHT", -25, -8)
+	-- 版本号和作者（可点击）
+	local versionBtn = CreateFrame("Button", nil, frame)
+	versionBtn:SetSize(150, 20)
+	versionBtn:SetPoint("TOPRIGHT", -25, -8)
+	
+	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.0 by 专业打地鼠", false, "RIGHT")
+	versionText:SetPoint("RIGHT", 0, 0)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
+	
+	-- 鼠标悬停效果
+	versionBtn:SetScript("OnEnter", function(self)
+		versionText:SetTextColor(0, 1, 0)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:AddLine("点击查看使用说明", 1, 1, 1)
+		GameTooltip:Show()
+	end)
+	
+	versionBtn:SetScript("OnLeave", function(self)
+		versionText:SetTextColor(0.7, 0.7, 0.7)
+		GameTooltip:Hide()
+	end)
+	
+	-- 点击打开欢迎界面
+	versionBtn:SetScript("OnClick", function()
+		if KM.UI and KM.UI.ShowWelcomeDialog then
+			local currentVersion = GetAddOnMetadata("KeywordMonitor", "Version") or "2.0.0"
+			local author = GetAddOnMetadata("KeywordMonitor", "Author") or "专业打地鼠"
+			KM.UI.ShowWelcomeDialog(currentVersion, "", author)  -- 空字符串表示显示首次安装界面
+		end
+	end)
 	
 	local closeBtn = Utils.CreateCloseButton(frame)
 	closeBtn:SetPoint("TOPRIGHT", -10, -10)
@@ -520,53 +546,9 @@ function UI.CreateConfigFrame()
 		end
 	end)
 	
-	-- 历史记录按钮
-	local historyBtn = Utils.CreateButton(frame, 120, 25, "历史记录")
-	historyBtn:SetPoint("LEFT", groupBtn, "RIGHT", 10, 0)
-	historyBtn:SetScript("OnClick", function()
-		if KM.History and KM.History.ShowHistoryUI then
-			KM.History.ShowHistoryUI()
-		else
-			print("|cffFF0000[ChatKeyword]|r 历史记录模块尚未加载")
-		end
-	end)
-	
-	-- 快速回复按钮
-	local quickReplyBtn = Utils.CreateButton(frame, 120, 25, "快速回复")
-	quickReplyBtn:SetPoint("LEFT", historyBtn, "RIGHT", 10, 0)
-	quickReplyBtn:SetScript("OnClick", function()
-		if KM.QuickReply and KM.QuickReply.ShowQuickReplyUI then
-			KM.QuickReply.ShowQuickReplyUI()
-		else
-			print("|cffFF0000[ChatKeyword]|r 快速回复模块尚未加载")
-		end
-	end)
-	
-	-- 统计数据按钮
-	local statsBtn = Utils.CreateButton(frame, 120, 25, "统计数据")
-	statsBtn:SetPoint("TOPLEFT", 20, -350)
-	statsBtn:SetScript("OnClick", function()
-		if KM.Statistics and KM.Statistics.ShowStatisticsUI then
-			KM.Statistics.ShowStatisticsUI()
-		else
-			print("|cffFF0000[ChatKeyword]|r 统计数据模块尚未加载")
-		end
-	end)
-	
-	-- 性能监控按钮
-	local perfBtn = Utils.CreateButton(frame, 120, 25, "性能监控")
-	perfBtn:SetPoint("LEFT", statsBtn, "RIGHT", 10, 0)
-	perfBtn:SetScript("OnClick", function()
-		if KM.Statistics and KM.Statistics.ShowPerformanceUI then
-			KM.Statistics.ShowPerformanceUI()
-		else
-			print("|cffFF0000[ChatKeyword]|r 性能监控模块尚未加载")
-		end
-	end)
-	
 	-- NDui 美化开关（始终可用）
 	local nduiCheck = Utils.CreateCheckBox(frame)
-	nduiCheck:SetPoint("TOPLEFT", 20, -385)
+	nduiCheck:SetPoint("TOPLEFT", 20, -355)
 	nduiCheck:SetChecked(KeywordMonitorDB.UseNDuiStyle)
 	local nduiLabel = Utils.CreateFS(frame, 13, "使用 NDui 美化风格", false, "LEFT")
 	nduiLabel:SetPoint("LEFT", nduiCheck, "RIGHT", 5, 0)
@@ -576,30 +558,38 @@ function UI.CreateConfigFrame()
 	nduiHint:SetPoint("LEFT", nduiLabel, "RIGHT", 10, 0)
 	nduiHint:SetTextColor(0.7, 0.7, 0.7)
 	
+	-- 重载按钮（初始隐藏）
+	local reloadBtn = Utils.CreateButton(frame, 100, 25, "重载界面")
+	reloadBtn:SetPoint("TOPLEFT", 20, -380)
+	reloadBtn:Hide()
+	reloadBtn:SetScript("OnClick", function()
+		ReloadUI()
+	end)
+	
 	nduiCheck:SetScript("OnClick", function(self)
 		local checked = self:GetChecked()
 		KeywordMonitorDB.UseNDuiStyle = checked
-		-- 提示需要重载界面
-		print("|cff00FF00[ChatKeyword]|r 美化风格已更改，请 |cffFFFF00/reload|r 重载界面生效")
+		-- 显示重载按钮
+		reloadBtn:Show()
 	end)
 	
 	local outputLabel = Utils.CreateFS(frame, 14, "输出方式:", false, "LEFT")
-	outputLabel:SetPoint("TOPLEFT", 20, -415)
+	outputLabel:SetPoint("TOPLEFT", 20, -410)
 	
 	local systemRadio = Utils.CreateCheckBox(frame)
-	systemRadio:SetPoint("TOPLEFT", 40, -440)
+	systemRadio:SetPoint("TOPLEFT", 40, -435)
 	systemRadio:SetChecked(KeywordMonitorDB.OutputMode == 1)
 	local systemLabel = Utils.CreateFS(frame, 13, "系统聊天窗口", false, "LEFT")
 	systemLabel:SetPoint("LEFT", systemRadio, "RIGHT", 5, 0)
 	
 	local independentRadio = Utils.CreateCheckBox(frame)
-	independentRadio:SetPoint("TOPLEFT", 40, -465)
+	independentRadio:SetPoint("TOPLEFT", 40, -460)
 	independentRadio:SetChecked(KeywordMonitorDB.OutputMode == 2)
 	local independentLabel = Utils.CreateFS(frame, 13, "独立聊天窗口", false, "LEFT")
 	independentLabel:SetPoint("LEFT", independentRadio, "RIGHT", 5, 0)
 	
 	local chatFrameLabel = Utils.CreateFS(frame, 13, "输出到聊天窗口", false, "LEFT")
-	chatFrameLabel:SetPoint("TOPLEFT", 60, -495)
+	chatFrameLabel:SetPoint("TOPLEFT", 60, -490)
 	
 	local chatFrameDropdown = CreateFrame("Frame", nil, frame, "BackdropTemplate")
 	chatFrameDropdown:SetSize(150, 30)
@@ -742,7 +732,7 @@ function UI.CreateConfigFrame()
 	end)
 	
 	local flashCheck = Utils.CreateCheckBox(frame)
-	flashCheck:SetPoint("TOPLEFT", 60, -525)
+	flashCheck:SetPoint("TOPLEFT", 60, -520)
 	flashCheck:SetChecked(KeywordMonitorDB.FlashOnMatch)
 	local flashLabel = Utils.CreateFS(frame, 13, "提取成功窗口标签闪动", false, "LEFT")
 	flashLabel:SetPoint("LEFT", flashCheck, "RIGHT", 5, 0)
@@ -753,7 +743,7 @@ function UI.CreateConfigFrame()
 	end)
 	
 	local combatHideCheck = Utils.CreateCheckBox(frame)
-	combatHideCheck:SetPoint("TOPLEFT", 60, -550)
+	combatHideCheck:SetPoint("TOPLEFT", 60, -545)
 	combatHideCheck:SetChecked(KeywordMonitorDB.CombatHide)
 	local combatHideLabel = Utils.CreateFS(frame, 13, "战斗中隐藏独立窗口", false, "LEFT")
 	combatHideLabel:SetPoint("LEFT", combatHideCheck, "RIGHT", 5, 0)
@@ -778,12 +768,15 @@ function UI.CreateConfigFrame()
 			audioCheck:Show()
 			audioLabel:Show()
 			audioText:Show()
+			classColorCheck:Show()
+			classColorLabel:Show()
 			inheritCheck:Show()
 			inheritLabel:Show()
 			
-			-- 频道选择和黑名单按钮
+			-- 功能按钮
 			channelBtn:Show()
 			blacklistBtn:Show()
+			groupBtn:Show()
 			
 			-- NDui 美化开关（始终显示）
 			nduiCheck:Show()
@@ -822,12 +815,15 @@ function UI.CreateConfigFrame()
 			audioCheck:Hide()
 			audioLabel:Hide()
 			audioText:Hide()
+			classColorCheck:Hide()
+			classColorLabel:Hide()
 			inheritCheck:Hide()
 			inheritLabel:Hide()
 			
-			-- 频道选择和黑名单按钮
+			-- 功能按钮
 			channelBtn:Hide()
 			blacklistBtn:Hide()
+			groupBtn:Hide()
 			
 			-- NDui 美化开关
 			nduiCheck:Hide()
@@ -887,6 +883,7 @@ function UI.CreateConfigFrame()
 	
 	frame:SetScript("OnShow", function(self)
 		enableCheck:SetChecked(KeywordMonitorDB.Enabled)
+		reloadBtn:Hide()  -- 重新打开界面时隐藏重载按钮
 		UpdateOptionsVisibility()
 	end)
 	
@@ -1135,6 +1132,171 @@ function UI.UpdateButtonStatus()
 			keywordButton.Icon:SetVertexColor(1, 0, 0)
 		end
 	end
+end
+
+--[[
+    ShowWelcomeDialog(currentVersion, lastVersion, author)
+    显示欢迎/更新对话框
+    
+    参数：
+    - currentVersion: 当前版本号
+    - lastVersion: 上次版本号（空字符串表示首次安装）
+    - author: 作者名称
+    
+    说明：
+    - 首次安装显示欢迎界面
+    - 版本更新显示更新日志
+--]]
+function UI.ShowWelcomeDialog(currentVersion, lastVersion, author)
+	LoadDependencies()
+	
+	local isFirstInstall = lastVersion == ""
+	
+	-- 创建对话框
+	local dialog = CreateFrame("Frame", "KeywordMonitor_WelcomeDialog", UIParent, "BackdropTemplate")
+	dialog:SetSize(600, 500)
+	dialog:SetPoint("CENTER")
+	dialog:SetFrameStrata("FULLSCREEN_DIALOG")
+	dialog:SetFrameLevel(200)
+	
+	-- 根据配置选择UI风格
+	local useNDui = KeywordMonitorDB.UseNDuiStyle
+	if useNDui then
+		Utils.SetBD(dialog)
+	else
+		dialog:SetBackdrop({
+			bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+			edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+			tile = true,
+			tileSize = 32,
+			edgeSize = 32,
+			insets = { left = 11, right = 12, top = 12, bottom = 11 }
+		})
+	end
+	
+	dialog:EnableMouse(true)
+	dialog:SetMovable(true)
+	dialog:RegisterForDrag("LeftButton")
+	dialog:SetScript("OnDragStart", dialog.StartMoving)
+	dialog:SetScript("OnDragStop", dialog.StopMovingOrSizing)
+	
+	-- 标题
+	local title = Utils.CreateFS(dialog, 18, isFirstInstall and "欢迎使用 KeywordMonitor" or "KeywordMonitor 已更新", true)
+	title:SetPoint("TOP", 0, -20)
+	title:SetTextColor(0, 1, 0)
+	
+	-- 版本信息
+	local versionText = Utils.CreateFS(dialog, 14, "当前版本: v" .. currentVersion, false, "CENTER")
+	versionText:SetPoint("TOP", 0, -50)
+	versionText:SetTextColor(1, 1, 1)
+	
+	if not isFirstInstall then
+		local lastVersionText = Utils.CreateFS(dialog, 12, "(上次: v" .. lastVersion .. ")", false, "CENTER")
+		lastVersionText:SetPoint("TOP", 0, -70)
+		lastVersionText:SetTextColor(0.5, 0.5, 0.5)
+	end
+	
+	-- 作者信息
+	local authorText = Utils.CreateFS(dialog, 12, "作者: " .. author, false, "CENTER")
+	authorText:SetPoint("TOP", 0, isFirstInstall and -70 or -90)
+	authorText:SetTextColor(0.7, 0.7, 0.7)
+	
+	-- 分隔线
+	local separator = dialog:CreateTexture(nil, "ARTWORK")
+	separator:SetSize(560, 1)
+	separator:SetPoint("TOP", 0, isFirstInstall and -100 or -120)
+	separator:SetColorTexture(0.3, 0.3, 0.3, 1)
+	
+	-- 内容区域（滚动框）
+	local scrollFrame = CreateFrame("ScrollFrame", nil, dialog, "UIPanelScrollFrameTemplate")
+	scrollFrame:SetPoint("TOPLEFT", 20, isFirstInstall and -120 or -140)
+	scrollFrame:SetPoint("BOTTOMRIGHT", -40, 60)
+	
+	local scrollChild = CreateFrame("Frame", nil, scrollFrame)
+	scrollChild:SetSize(540, 1)
+	scrollFrame:SetScrollChild(scrollChild)
+	
+	local yOffset = -10
+	
+	if isFirstInstall then
+		-- 首次安装：显示使用说明
+		local usageTitle = Utils.CreateFS(scrollChild, 14, "使用说明", true)
+		usageTitle:SetPoint("TOPLEFT", 10, yOffset)
+		usageTitle:SetTextColor(1, 0.8, 0)
+		yOffset = yOffset - 25
+		
+		local commands = {
+			"/km - 打开配置界面",
+			"/km on - 开启监控",
+			"/km off - 关闭监控",
+		}
+		
+		for _, cmd in ipairs(commands) do
+			local cmdText = Utils.CreateFS(scrollChild, 12, "  • " .. cmd, false, "LEFT")
+			cmdText:SetPoint("TOPLEFT", 10, yOffset)
+			cmdText:SetTextColor(0.9, 0.9, 0.9)
+			yOffset = yOffset - 20
+		end
+		
+		yOffset = yOffset - 10
+		
+		-- 主要功能
+		local featuresTitle = Utils.CreateFS(scrollChild, 14, "主要功能", true)
+		featuresTitle:SetPoint("TOPLEFT", 10, yOffset)
+		featuresTitle:SetTextColor(1, 0.8, 0)
+		yOffset = yOffset - 25
+		
+		local features = {
+			"关键词分组管理 - 灵活管理多组关键词",
+			"预设方案 - 一键应用常用配置",
+			"导入/导出 - 轻松备份和分享配置",
+			"黑名单管理 - 过滤不想看到的玩家和关键词",
+			"职业染色 - 根据职业显示不同颜色",
+			"频道选择 - 自定义监控哪些聊天频道",
+		}
+		
+		for _, feature in ipairs(features) do
+			local featureText = Utils.CreateFS(scrollChild, 12, "  • " .. feature, false, "LEFT")
+			featureText:SetPoint("TOPLEFT", 10, yOffset)
+			featureText:SetTextColor(0.9, 0.9, 0.9)
+			yOffset = yOffset - 20
+		end
+	else
+		-- 版本更新：显示更新日志
+		local updateTitle = Utils.CreateFS(scrollChild, 14, "v" .. currentVersion .. " 更新内容", true)
+		updateTitle:SetPoint("TOPLEFT", 10, yOffset)
+		updateTitle:SetTextColor(1, 0.8, 0)
+		yOffset = yOffset - 25
+		
+		local updates = {
+			"完成代码模块化重构",
+			"将 6000+ 行代码拆分为 11 个独立模块",
+			"新增职业染色开关功能",
+			"提高代码可维护性和可扩展性",
+			"优化模块加载顺序和性能",
+			"保持所有原有功能不变",
+			"保持数据完全兼容",
+		}
+		
+		for _, update in ipairs(updates) do
+			local updateText = Utils.CreateFS(scrollChild, 12, "  • " .. update, false, "LEFT")
+			updateText:SetPoint("TOPLEFT", 10, yOffset)
+			updateText:SetTextColor(0.9, 0.9, 0.9)
+			yOffset = yOffset - 20
+		end
+	end
+	
+	scrollChild:SetHeight(math.abs(yOffset) + 20)
+	
+	-- 关闭按钮
+	local closeBtn = Utils.CreateButton(dialog, 100, 30, "知道了")
+	closeBtn:SetPoint("BOTTOM", 0, 20)
+	closeBtn:SetScript("OnClick", function()
+		dialog:Hide()
+	end)
+	
+	-- 显示对话框
+	dialog:Show()
 end
 
 --[[============================================
