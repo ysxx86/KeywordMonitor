@@ -144,14 +144,8 @@ function UI.CreateConfigFrame()
 	-- 根据配置选择UI风格
 	local useNDui = KeywordMonitorDB.UseNDuiStyle
 	if useNDui then
-		-- 使用 NDui 风格的简洁边框
-		frame:SetBackdrop({
-			bgFile = "Interface\\Buttons\\WHITE8X8",
-			edgeFile = "Interface\\Buttons\\WHITE8X8",
-			edgeSize = 1,
-		})
-		frame:SetBackdropColor(0, 0, 0, 0.7)
-		frame:SetBackdropBorderColor(0, 0, 0, 1)
+		-- 使用完整的 NDui 风格美化（带阴影和纹理）
+		Utils.SetBD(frame)
 	else
 		-- 使用暴雪原生UI背景和边框
 		frame:SetBackdrop({
@@ -283,13 +277,7 @@ function UI.CreateConfigFrame()
 			popup:SetFrameLevel(frame:GetFrameLevel() + 10)
 			
 			if KeywordMonitorDB.UseNDuiStyle then
-				popup:SetBackdrop({
-					bgFile = "Interface\\Buttons\\WHITE8X8",
-					edgeFile = "Interface\\Buttons\\WHITE8X8",
-					edgeSize = 1,
-				})
-				popup:SetBackdropColor(0, 0, 0, 0.9)
-				popup:SetBackdropBorderColor(0, 0, 0, 1)
+				Utils.SetBD(popup, 0.9)
 			else
 				popup:SetBackdrop({
 					bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -363,13 +351,7 @@ function UI.CreateConfigFrame()
 			popup:SetFrameLevel(frame:GetFrameLevel() + 10)
 			
 			if KeywordMonitorDB.UseNDuiStyle then
-				popup:SetBackdrop({
-					bgFile = "Interface\\Buttons\\WHITE8X8",
-					edgeFile = "Interface\\Buttons\\WHITE8X8",
-					edgeSize = 1,
-				})
-				popup:SetBackdropColor(0, 0, 0, 0.9)
-				popup:SetBackdropBorderColor(0, 0, 0, 1)
+				Utils.SetBD(popup, 0.9)
 			else
 				popup:SetBackdrop({
 					bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
@@ -590,7 +572,7 @@ function UI.CreateConfigFrame()
 	nduiLabel:SetPoint("LEFT", nduiCheck, "RIGHT", 5, 0)
 	nduiLabel:SetTextColor(1, 0.8, 0)
 	
-	local nduiHint = Utils.CreateFS(frame, 11, "(简洁黑色边框)", false, "LEFT")
+	local nduiHint = Utils.CreateFS(frame, 11, "(完整 NDui 风格：背景、按钮、边框、阴影)", false, "LEFT")
 	nduiHint:SetPoint("LEFT", nduiLabel, "RIGHT", 10, 0)
 	nduiHint:SetTextColor(0.7, 0.7, 0.7)
 	
@@ -932,49 +914,81 @@ function UI.CreateKeywordButton()
 	
 	local bu
 	
-	-- 只有在用户配置启用 NDui 风格且 NDui 已加载时才使用 NDui 按钮
-	local useNDuiStyle = KeywordMonitorDB.UseNDuiStyle and IsAddOnLoaded("NDui")
+	-- 检查是否启用 NDui 风格
+	local useNDuiStyle = KeywordMonitorDB.UseNDuiStyle
 	
 	if useNDuiStyle then
+		-- 创建 NDui 风格按钮
+		bu = CreateFrame("Button", "KeywordMonitor_Button", UIParent, "BackdropTemplate")
+		bu:SetSize(28, 28)
 		
-		local width, height = 40, 8
-		bu = CreateFrame("Button", "KeywordMonitor_Button", chatbar, "BackdropTemplate")
-		bu:SetSize(width, height)
-		
-		-- 使用 NDui 的美化函数（如果可用）
-		local B = addon and addon.B
-		local DB = addon and addon.DB
-		if B and B.PixelIcon then
-			B.PixelIcon(bu, DB.normTex, true)
-			B.CreateSD(bu)
-			bu.Icon:SetVertexColor(1, 0, 0)
-		end
-		
-		bu:SetHitRectInsets(0, 0, -8, -8)
-		bu:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-		
-		if B and B.AddTooltip then
-			B.AddTooltip(bu, "ANCHOR_TOP", 
-				"|cff00FFff左键|r - 设置提取过滤\n" ..
-				"|cff00FFff右键|r - 启用/关闭提取\n" ..
-				"|cff00FFffShift+右键|r - 启用/关闭过滤"
-			)
-		end
-		
-		local children = {chatbar:GetChildren()}
-		local lastButton
-		for i = #children, 1, -1 do
-			if children[i]:IsObjectType("Button") and children[i] ~= bu then
-				lastButton = children[i]
-				break
-			end
-		end
-		
-		if lastButton then
-			bu:SetPoint("LEFT", lastButton, "RIGHT", 5, 0)
+		-- 默认位置：综合频道标签的上方
+		local chatTab = _G["ChatFrame1Tab"]
+		if chatTab then
+			bu:SetPoint("BOTTOM", chatTab, "TOP", 0, 5)
 		else
-			bu:SetPoint("LEFT", chatbar, "LEFT", 0, 0)
+			bu:SetPoint("BOTTOMLEFT", ChatFrame1, "TOPLEFT", 0, 5)
 		end
+		
+		bu:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+		bu:SetMovable(true)
+		bu:SetClampedToScreen(true)
+		
+		-- 直接在按钮上设置 NDui 风格背景
+		Utils.CreateBD(bu, 0.7)
+		
+		-- 创建阴影
+		Utils.CreateSD(bu)
+		
+		-- 创建背景纹理
+		Utils.CreateTex(bu)
+		
+		-- 创建图标
+		bu.Icon = bu:CreateTexture(nil, "ARTWORK")
+		bu.Icon:SetSize(18, 18)
+		bu.Icon:SetPoint("CENTER", 0, 0)
+		bu.Icon:SetTexture("Interface\\ChatFrame\\UI-ChatIcon-ArmoryChat")
+		bu.Icon:SetTexCoord(0.1, 0.9, 0.1, 0.9)
+		
+		-- 高亮效果
+		bu:SetScript("OnEnter", function(self)
+			self:SetBackdropBorderColor(0.7, 0.7, 0.7, 1)
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
+			GameTooltip:AddLine("聊天关键词提取", 1, 1, 1)
+			GameTooltip:AddLine("|cff00FFff左键|r - 打开配置", 0.7, 0.7, 0.7)
+			GameTooltip:AddLine("|cff00FFff右键|r - 启用/关闭", 0.7, 0.7, 0.7)
+			GameTooltip:AddLine("|cffFFFF00Shift+拖拽|r - 移动按钮", 0.7, 0.7, 0.7)
+			GameTooltip:Show()
+		end)
+		bu:SetScript("OnLeave", function(self)
+			self:SetBackdropBorderColor(0, 0, 0, 1)
+			GameTooltip:Hide()
+		end)
+		
+		-- 恢复保存的位置
+		if KeywordMonitorDB.ButtonPos then
+			bu:ClearAllPoints()
+			bu:SetPoint(KeywordMonitorDB.ButtonPos.point, UIParent, KeywordMonitorDB.ButtonPos.relativePoint, 
+				KeywordMonitorDB.ButtonPos.x, KeywordMonitorDB.ButtonPos.y)
+		end
+		
+		-- 拖拽功能
+		bu:RegisterForDrag("LeftButton")
+		bu:SetScript("OnDragStart", function(self)
+			if IsShiftKeyDown() then
+				self:StartMoving()
+			end
+		end)
+		bu:SetScript("OnDragStop", function(self)
+			self:StopMovingOrSizing()
+			local point, _, relativePoint, x, y = self:GetPoint()
+			KeywordMonitorDB.ButtonPos = {
+				point = point,
+				relativePoint = relativePoint,
+				x = x,
+				y = y
+			}
+		end)
 	else
 		-- 创建类似暴雪UI的按钮样式
 		bu = CreateFrame("Button", "KeywordMonitor_Button", UIParent, "BackdropTemplate")

@@ -139,7 +139,111 @@ end
     UI 辅助函数
 ============================================]]--
 
--- 创建背景
+-- NDui 材质路径
+local Media = "Interface\\Addons\\KeywordMonitor\\Media\\"
+local bdTex = "Interface\\ChatFrame\\ChatFrameBackground"
+local glowTex = Media.."glowTex"
+local normTex = Media.."normTex"
+local bgTex = Media.."bgTex"
+local mult = 1  -- 边框倍数
+
+-- SetOutside 辅助函数
+local function SetOutside(frame, anchor, xOffset, yOffset, anchor2)
+	xOffset = xOffset or 1
+	yOffset = yOffset or 1
+	anchor = anchor or frame:GetParent()
+
+	frame:ClearAllPoints()
+	frame:SetPoint("TOPLEFT", anchor, "TOPLEFT", -xOffset, yOffset)
+	frame:SetPoint("BOTTOMRIGHT", anchor2 or anchor, "BOTTOMRIGHT", xOffset, -yOffset)
+end
+
+-- SetInside 辅助函数
+local function SetInside(frame, anchor, xOffset, yOffset, anchor2)
+	xOffset = xOffset or 1
+	yOffset = yOffset or 1
+	anchor = anchor or frame:GetParent()
+
+	frame:ClearAllPoints()
+	frame:SetPoint("TOPLEFT", anchor, "TOPLEFT", xOffset, -yOffset)
+	frame:SetPoint("BOTTOMRIGHT", anchor2 or anchor, "BOTTOMRIGHT", -xOffset, yOffset)
+end
+
+-- 创建背景纹理
+local function CreateTex(frame)
+	if frame.__bgTex then return end
+
+	local parent = frame
+	if frame:IsObjectType("Texture") then parent = frame:GetParent() end
+
+	local tex = parent:CreateTexture(nil, "BACKGROUND", nil, 1)
+	tex:SetAllPoints(frame)
+	tex:SetTexture(bgTex, true, true)
+	tex:SetHorizTile(true)
+	tex:SetVertTile(true)
+	tex:SetBlendMode("ADD")
+
+	frame.__bgTex = tex
+end
+
+-- 创建阴影
+local shadowBackdrop = {edgeFile = glowTex}
+
+local function CreateSD(frame, size, override)
+	if frame.__shadow then return end
+
+	local parent = frame
+	if frame:IsObjectType("Texture") then parent = frame:GetParent() end
+
+	shadowBackdrop.edgeSize = size or 5
+	frame.__shadow = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+	SetOutside(frame.__shadow, frame, size or 4, size or 4)
+	frame.__shadow:SetBackdrop(shadowBackdrop)
+	frame.__shadow:SetBackdropBorderColor(0, 0, 0, size and 1 or .4)
+	frame.__shadow:SetFrameLevel(1)
+
+	return frame.__shadow
+end
+
+-- 创建基础背景
+local defaultBackdrop = {bgFile = bdTex, edgeFile = bdTex}
+
+local function CreateBD(frame, alpha)
+	defaultBackdrop.edgeSize = mult
+	frame:SetBackdrop(defaultBackdrop)
+	frame:SetBackdropColor(0, 0, 0, alpha or 0.7)
+	frame:SetBackdropBorderColor(0, 0, 0, 1)
+end
+
+-- 创建背景框架
+local function CreateBDFrame(frame, alpha, gradient)
+	local parent = frame
+	if frame:IsObjectType("Texture") then parent = frame:GetParent() end
+	local lvl = parent:GetFrameLevel()
+
+	local bg = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+	SetOutside(bg, frame)
+	bg:SetFrameLevel(lvl == 0 and 0 or lvl - 1)
+	CreateBD(bg, alpha)
+
+	return bg
+end
+
+-- 设置背景（完整版）
+local function SetBD(frame, alpha, x, y, x2, y2)
+	local bg = CreateBDFrame(frame, alpha)
+	if x then
+		bg:ClearAllPoints()
+		bg:SetPoint("TOPLEFT", frame, x, y)
+		bg:SetPoint("BOTTOMRIGHT", frame, x2, y2)
+	end
+	CreateSD(bg)
+	CreateTex(bg)
+
+	return bg
+end
+
+-- 公共接口：创建背景
 -- @param frame Frame 要添加背景的框架
 -- @param alpha number 背景透明度（可选，默认 0.7）
 function Utils.CreateBD(frame, alpha)
@@ -147,15 +251,9 @@ function Utils.CreateBD(frame, alpha)
 	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
 	
 	if useNDui then
-		-- 使用 NDui 风格的简洁边框
+		-- 使用完整的 NDui 风格美化
 		if not frame.SetBackdrop then return end
-		frame:SetBackdrop({
-			bgFile = "Interface\\Buttons\\WHITE8X8",
-			edgeFile = "Interface\\Buttons\\WHITE8X8",
-			edgeSize = 1,
-		})
-		frame:SetBackdropColor(0, 0, 0, alpha or 0.7)
-		frame:SetBackdropBorderColor(0, 0, 0, 1)
+		CreateBD(frame, alpha)
 	else
 		-- 使用暴雪原生UI背景
 		if not frame.SetBackdrop then return end
@@ -171,6 +269,226 @@ function Utils.CreateBD(frame, alpha)
 		frame:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
 	end
 end
+
+-- 公共接口：创建背景框架（NDui 风格）
+-- @param frame Frame 要添加背景的框架
+-- @param alpha number 背景透明度（可选）
+-- @return Frame 创建的背景框架
+function Utils.CreateBDFrame(frame, alpha)
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	if useNDui then
+		return CreateBDFrame(frame, alpha)
+	else
+		-- 原生风格的简化版本
+		local parent = frame
+		if frame:IsObjectType("Texture") then parent = frame:GetParent() end
+		
+		local bg = CreateFrame("Frame", nil, parent, "BackdropTemplate")
+		SetOutside(bg, frame)
+		bg:SetBackdrop({
+			bgFile = "Interface\\Buttons\\WHITE8X8",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = false,
+			tileSize = 16,
+			edgeSize = 12,
+			insets = { left = 2, right = 2, top = 2, bottom = 2 }
+		})
+		bg:SetBackdropColor(0, 0, 0, alpha or 0.7)
+		bg:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+		return bg
+	end
+end
+
+-- 公共接口：设置背景（完整版，带阴影和纹理）
+-- @param frame Frame 要添加背景的框架
+-- @param alpha number 背景透明度（可选）
+-- @param x, y, x2, y2 number 可选的偏移量
+-- @return Frame 创建的背景框架
+function Utils.SetBD(frame, alpha, x, y, x2, y2)
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	if useNDui then
+		return SetBD(frame, alpha, x, y, x2, y2)
+	else
+		-- 原生风格
+		local bg = Utils.CreateBDFrame(frame, alpha)
+		if x then
+			bg:ClearAllPoints()
+			bg:SetPoint("TOPLEFT", frame, x, y)
+			bg:SetPoint("BOTTOMRIGHT", frame, x2, y2)
+		end
+		return bg
+	end
+end
+
+-- 公共接口：创建阴影
+-- @param frame Frame 要添加阴影的框架
+-- @param size number 阴影大小（可选）
+-- @return Frame 创建的阴影框架
+function Utils.CreateSD(frame, size)
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	if useNDui then
+		return CreateSD(frame, size, true)
+	end
+	-- 原生风格不添加阴影
+end
+
+-- 公共接口：创建背景纹理
+-- @param frame Frame 要添加纹理的框架
+function Utils.CreateTex(frame)
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	if useNDui then
+		CreateTex(frame)
+	end
+	-- 原生风格不添加纹理
+end
+
+-- 导出辅助函数供其他模块使用
+Utils.SetOutside = SetOutside
+Utils.SetInside = SetInside
+
+--[[============================================
+    NDui 风格美化函数
+============================================]]--
+
+-- 按钮鼠标悬停效果
+local function Button_OnEnter(self)
+	if self.__bg then
+		self.__bg:SetBackdropBorderColor(0.7, 0.7, 0.7, 1)
+	end
+end
+
+local function Button_OnLeave(self)
+	if self.__bg then
+		self.__bg:SetBackdropBorderColor(0, 0, 0, 1)
+	end
+end
+
+-- 美化按钮（NDui 风格）
+local function ReskinButton(button)
+	if button.SetNormalTexture then button:SetNormalTexture(0) end
+	if button.SetHighlightTexture then button:SetHighlightTexture(0) end
+	if button.SetPushedTexture then button:SetPushedTexture(0) end
+	if button.SetDisabledTexture then button:SetDisabledTexture("") end
+
+	-- 移除暴雪默认纹理
+	local regions = {"Left", "Middle", "Right", "Cover", "Border", "Background"}
+	local buttonName = button.GetName and button:GetName()
+	for _, region in pairs(regions) do
+		local r = buttonName and _G[buttonName..region] or button[region]
+		if r then
+			r:SetAlpha(0)
+			r:Hide()
+		end
+	end
+
+	button.__bg = CreateBDFrame(button, 0)
+	button.__bg:SetFrameLevel(button:GetFrameLevel())
+	button.__bg:SetAllPoints()
+
+	button:HookScript("OnEnter", Button_OnEnter)
+	button:HookScript("OnLeave", Button_OnLeave)
+end
+
+-- 美化复选框（NDui 风格）
+local function ReskinCheck(check)
+	check:SetNormalTexture(0)
+	check:SetPushedTexture(0)
+
+	local bg = CreateBDFrame(check, 0)
+	SetInside(bg, check, 4, 4)
+	check.bg = bg
+
+	check:SetHighlightTexture(bdTex)
+	local hl = check:GetHighlightTexture()
+	if hl then
+		SetInside(hl, bg)
+		hl:SetVertexColor(0.7, 0.7, 0.7, 0.25)
+	end
+
+	-- 创建勾选纹理
+	local ch = check:CreateTexture(nil, "ARTWORK")
+	ch:SetTexture("Interface\\Buttons\\UI-CheckBox-Check")
+	ch:SetVertexColor(0, 0.8, 1)
+	SetInside(ch, bg)
+	check:SetCheckedTexture(ch)
+end
+
+-- 美化编辑框（NDui 风格）
+local function ReskinEditBox(editbox)
+	local regions = {"Left", "Middle", "Right", "Cover", "Border", "Background"}
+	local frameName = editbox.GetName and editbox:GetName()
+	for _, region in pairs(regions) do
+		local r = frameName and _G[frameName..region] or editbox[region]
+		if r then
+			r:SetAlpha(0)
+		end
+	end
+
+	local bg = CreateBDFrame(editbox, 0)
+	bg:SetPoint("TOPLEFT", -2, 0)
+	bg:SetPoint("BOTTOMRIGHT")
+	editbox.bg = bg
+end
+
+-- 美化关闭按钮（NDui 风格）
+local closeTex = Media.."Hutu\\close"  -- 使用 NDui 的关闭图标
+
+local function ReskinClose(button, parent, xOffset, yOffset)
+	parent = parent or button:GetParent()
+	xOffset = xOffset or -6
+	yOffset = yOffset or -6
+
+	button:SetSize(16, 16)
+	button:ClearAllPoints()
+	button:SetPoint("TOPRIGHT", parent, "TOPRIGHT", xOffset, yOffset)
+
+	-- 移除默认纹理
+	if button.SetNormalTexture then button:SetNormalTexture(0) end
+	if button.SetHighlightTexture then button:SetHighlightTexture(0) end
+	if button.SetPushedTexture then button:SetPushedTexture(0) end
+	if button.Border then button.Border:SetAlpha(0) end
+
+	local bg = CreateBDFrame(button, 0)
+	bg:SetAllPoints()
+
+	button:SetDisabledTexture(bdTex)
+	local dis = button:GetDisabledTexture()
+	dis:SetVertexColor(0, 0, 0, .4)
+	dis:SetDrawLayer("OVERLAY")
+	dis:SetAllPoints()
+
+	-- 创建 X 图标
+	local tex = button:CreateTexture()
+	tex:SetTexture(closeTex)
+	tex:SetAllPoints()
+	tex:SetVertexColor(1, 1, 1)
+	button.__texture = tex
+
+	button:HookScript("OnEnter", function(self)
+		if self.bg then
+			self.bg:SetBackdropColor(0.7, 0, 0, 0.25)
+		end
+		if self.__texture then
+			self.__texture:SetVertexColor(1, 0, 0)
+		end
+	end)
+	button:HookScript("OnLeave", function(self)
+		if self.bg then
+			self.bg:SetBackdropColor(0, 0, 0, 0.25)
+		end
+		if self.__texture then
+			self.__texture:SetVertexColor(1, 1, 1)
+		end
+	end)
+end
+
+--[[============================================
+    公共 UI 创建函数
+============================================]]--
 
 -- 创建字体字符串
 -- @param frame Frame 父框架
@@ -196,9 +514,36 @@ end
 -- @param text string 按钮文本
 -- @return Button 创建的按钮
 function Utils.CreateButton(parent, width, height, text)
-	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	local btn = CreateFrame("Button", nil, parent)
 	btn:SetSize(width, height)
-	btn:SetText(text or "")
+	btn:EnableMouse(true)
+	btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	
+	if useNDui then
+		-- NDui 风格按钮
+		ReskinButton(btn)
+		
+		-- 创建文本
+		local fs = btn:CreateFontString(nil, "OVERLAY")
+		fs:SetFont(STANDARD_TEXT_FONT, 13)
+		fs:SetText(text or "")
+		fs:SetPoint("CENTER")
+		btn:SetFontString(fs)
+	else
+		-- 原生风格按钮
+		btn:SetNormalTexture("Interface\\Buttons\\UI-Panel-Button-Up")
+		btn:SetPushedTexture("Interface\\Buttons\\UI-Panel-Button-Down")
+		btn:SetHighlightTexture("Interface\\Buttons\\UI-Panel-Button-Highlight")
+		
+		local fs = btn:CreateFontString(nil, "OVERLAY")
+		fs:SetFont(STANDARD_TEXT_FONT, 13)
+		fs:SetText(text or "")
+		fs:SetPoint("CENTER")
+		btn:SetFontString(fs)
+	end
+	
 	return btn
 end
 
@@ -206,8 +551,25 @@ end
 -- @param parent Frame 父框架
 -- @return CheckButton 创建的复选框
 function Utils.CreateCheckBox(parent)
-	local cb = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
-	cb:SetSize(24, 24)
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	local cb = CreateFrame("CheckButton", nil, parent)
+	cb:SetSize(20, 20)
+	cb:EnableMouse(true)
+	cb:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	
+	if useNDui then
+		-- NDui 风格复选框
+		ReskinCheck(cb)
+	else
+		-- 原生风格复选框
+		cb:SetNormalTexture("Interface\\Buttons\\UI-CheckBox-Up")
+		cb:SetPushedTexture("Interface\\Buttons\\UI-CheckBox-Down")
+		cb:SetHighlightTexture("Interface\\Buttons\\UI-CheckBox-Highlight")
+		cb:SetCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check")
+		cb:SetDisabledCheckedTexture("Interface\\Buttons\\UI-CheckBox-Check-Disabled")
+	end
+	
 	return cb
 end
 
@@ -217,9 +579,31 @@ end
 -- @param height number 编辑框高度
 -- @return EditBox 创建的编辑框
 function Utils.CreateEditBox(parent, width, height)
-	local eb = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
+	
+	local eb = CreateFrame("EditBox", nil, parent)
 	eb:SetSize(width, height)
 	eb:SetAutoFocus(false)
+	eb:SetFontObject(ChatFontNormal)
+	
+	if useNDui then
+		-- NDui 风格编辑框
+		ReskinEditBox(eb)
+	else
+		-- 原生风格编辑框
+		eb:SetBackdrop({
+			bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+			edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+			tile = true,
+			tileSize = 16,
+			edgeSize = 16,
+			insets = { left = 3, right = 3, top = 3, bottom = 3 }
+		})
+		eb:SetBackdropColor(0, 0, 0, 0.5)
+		eb:SetBackdropBorderColor(0.4, 0.4, 0.4, 1)
+	end
+	
+	eb:SetTextInsets(5, 5, 0, 0)
 	return eb
 end
 
@@ -227,14 +611,19 @@ end
 -- @param parent Frame 父框架
 -- @return Button 创建的关闭按钮
 function Utils.CreateCloseButton(parent)
-	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-	btn:SetSize(28, 28)  -- 正方形，稍微大一点
-	btn:SetText("×")  -- 使用更美观的乘号符号
+	local useNDui = KeywordMonitorDB and KeywordMonitorDB.UseNDuiStyle
 	
-	-- 设置字体更大更清晰
-	local text = btn:GetFontString()
-	if text then
-		text:SetFont(STANDARD_TEXT_FONT, 18, "OUTLINE")
+	local btn = CreateFrame("Button", nil, parent)
+	btn:SetSize(16, 16)
+	
+	if useNDui then
+		-- NDui 风格关闭按钮
+		ReskinClose(btn, parent)
+	else
+		-- 原生风格关闭按钮
+		btn:SetNormalTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Up")
+		btn:SetPushedTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Down")
+		btn:SetHighlightTexture("Interface\\Buttons\\UI-Panel-MinimizeButton-Highlight")
 	end
 	
 	return btn
