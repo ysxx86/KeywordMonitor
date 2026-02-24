@@ -173,7 +173,7 @@ function UI.CreateConfigFrame()
 	versionBtn:SetSize(150, 20)
 	versionBtn:SetPoint("TOPRIGHT", -25, -8)
 	
-	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.0 by 专业打地鼠", false, "RIGHT")
+	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.1 by 专业打地鼠", false, "RIGHT")
 	versionText:SetPoint("RIGHT", 0, 0)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
 	
@@ -1270,13 +1270,9 @@ function UI.ShowWelcomeDialog(currentVersion, lastVersion, author)
 		yOffset = yOffset - 25
 		
 		local updates = {
-			"完成代码模块化重构",
-			"将 6000+ 行代码拆分为 11 个独立模块",
-			"新增职业染色开关功能",
-			"提高代码可维护性和可扩展性",
-			"优化模块加载顺序和性能",
-			"保持所有原有功能不变",
-			"保持数据完全兼容",
+			"支持逗号、顿号分隔的关键词作为【或】关系",
+			"例如 Mc,毒蛇 表示匹配 Mc 或 毒蛇 其中任意一个",
+			"优化关键词匹配算法，支持【或】组的智能识别和高亮",
 		}
 		
 		for _, update in ipairs(updates) do

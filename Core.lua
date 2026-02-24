@@ -8,7 +8,7 @@
 -- ============================================
 
 local addonName = "KeywordMonitor"
-local addonVersion = "2.0.0"
+local addonVersion = "2.0.1"
 local addonAuthor = "专业打地鼠"
 
 -- 使用已存在的全局命名空间（不要创建新的空表）

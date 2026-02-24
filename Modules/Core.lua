@@ -163,6 +163,11 @@ end
 -- 更新关键词列表
 -- @param keywordStr string 关键词字符串（可选，传统模式使用）
 -- @return void
+-- 
+-- 关键词语法说明：
+-- 1. 逗号、顿号分隔 = "或"关系：Mc,毒蛇 表示匹配 Mc 或 毒蛇
+-- 2. + 或 # 分隔 = "且"关系：Mc+毒蛇 表示同时匹配 Mc 和 毒蛇
+-- 3. & 前缀 = 排除：Mc&副本 表示匹配 Mc 但不包含 副本
 function Core.UpdateKeywordList(keywordStr)
 	LoadDependencies()
 	keywords = {}
@@ -174,19 +179,24 @@ function Core.UpdateKeywordList(keywordStr)
 		for _, group in ipairs(KeywordMonitorDB.KeywordGroups) do
 			if group.enabled and group.keywords and group.keywords ~= "" then
 				local groupKeywordStr = group.keywords
+				-- 统一分隔符：将中文逗号、顿号转换为英文逗号
 				groupKeywordStr = gsub(groupKeywordStr, "，", ",")
+				groupKeywordStr = gsub(groupKeywordStr, "、", ",")
 				groupKeywordStr = gsub(groupKeywordStr, "＋", "+")
 				
-				local list = Utils.SplitString(groupKeywordStr, ",")
+				-- 按分号分割（分号表示不同的关键词规则）
+				local ruleList = Utils.SplitString(groupKeywordStr, ";")
 				
-				for _, word in ipairs(list) do
-					if match(word, "&") or match(word, "#") or match(word, "+") then
+				for _, rule in ipairs(ruleList) do
+					-- 检查是否包含 "且" 或 "排除" 操作符
+					if match(rule, "&") or match(rule, "#") or match(rule, "+") then
+						-- 复杂规则：包含且/排除逻辑
 						local subList = {}
 						local currentWord = ""
 						local isExclude = false
 						
-						for i = 1, #word do
-							local char = sub(word, i, i)
+						for i = 1, #rule do
+							local char = sub(rule, i, i)
 							
 							if char == "+" or char == "#" then
 								currentWord = gsub(currentWord, "^%s*(.-)%s*$", "%1")
@@ -220,11 +230,36 @@ function Core.UpdateKeywordList(keywordStr)
 							tinsert(keywords, subList)
 						end
 					else
-						local upperWord = upper(word)
-						-- 扩展关键词别名
-						local expandedKeywords = ExpandSingleKeyword(upperWord)
-						for _, expandedWord in ipairs(expandedKeywords) do
-							tinsert(keywords, expandedWord)
+						-- 简单规则：按逗号分割，表示"或"关系
+						local orList = Utils.SplitString(rule, ",")
+						if #orList > 1 then
+							-- 多个关键词，创建"或"组
+							local orGroup = {isOrGroup = true, keywords = {}}
+							for _, word in ipairs(orList) do
+								word = gsub(word, "^%s*(.-)%s*$", "%1")  -- 去除首尾空格
+								if word ~= "" then
+									local upperWord = upper(word)
+									-- 扩展关键词别名
+									local expandedKeywords = ExpandSingleKeyword(upperWord)
+									for _, expandedWord in ipairs(expandedKeywords) do
+										tinsert(orGroup.keywords, expandedWord)
+									end
+								end
+							end
+							if #orGroup.keywords > 0 then
+								tinsert(keywords, orGroup)
+							end
+						else
+							-- 单个关键词
+							local word = gsub(rule, "^%s*(.-)%s*$", "%1")
+							if word ~= "" then
+								local upperWord = upper(word)
+								-- 扩展关键词别名
+								local expandedKeywords = ExpandSingleKeyword(upperWord)
+								for _, expandedWord in ipairs(expandedKeywords) do
+									tinsert(keywords, expandedWord)
+								end
+							end
 						end
 					end
 				end
@@ -236,19 +271,24 @@ function Core.UpdateKeywordList(keywordStr)
 	-- 传统模式：使用单一关键词字符串
 	if not keywordStr or keywordStr == "" then return end
 	
+	-- 统一分隔符
 	keywordStr = gsub(keywordStr, "，", ",")
+	keywordStr = gsub(keywordStr, "、", ",")
 	keywordStr = gsub(keywordStr, "＋", "+")
 	
-	local list = Utils.SplitString(keywordStr, ",")
+	-- 按分号分割（分号表示不同的关键词规则）
+	local ruleList = Utils.SplitString(keywordStr, ";")
 	
-	for _, word in ipairs(list) do
-		if match(word, "&") or match(word, "#") or match(word, "+") then
+	for _, rule in ipairs(ruleList) do
+		-- 检查是否包含 "且" 或 "排除" 操作符
+		if match(rule, "&") or match(rule, "#") or match(rule, "+") then
+			-- 复杂规则：包含且/排除逻辑
 			local subList = {}
 			local currentWord = ""
 			local isExclude = false
 			
-			for i = 1, #word do
-				local char = sub(word, i, i)
+			for i = 1, #rule do
+				local char = sub(rule, i, i)
 				
 				if char == "+" or char == "#" then
 					currentWord = gsub(currentWord, "^%s*(.-)%s*$", "%1")
@@ -282,11 +322,36 @@ function Core.UpdateKeywordList(keywordStr)
 				tinsert(keywords, subList)
 			end
 		else
-			local upperWord = upper(word)
-			-- 扩展关键词别名
-			local expandedKeywords = ExpandSingleKeyword(upperWord)
-			for _, expandedWord in ipairs(expandedKeywords) do
-				tinsert(keywords, expandedWord)
+			-- 简单规则：按逗号分割，表示"或"关系
+			local orList = Utils.SplitString(rule, ",")
+			if #orList > 1 then
+				-- 多个关键词，创建"或"组
+				local orGroup = {isOrGroup = true, keywords = {}}
+				for _, word in ipairs(orList) do
+					word = gsub(word, "^%s*(.-)%s*$", "%1")  -- 去除首尾空格
+					if word ~= "" then
+						local upperWord = upper(word)
+						-- 扩展关键词别名
+						local expandedKeywords = ExpandSingleKeyword(upperWord)
+						for _, expandedWord in ipairs(expandedKeywords) do
+							tinsert(orGroup.keywords, expandedWord)
+						end
+					end
+				end
+				if #orGroup.keywords > 0 then
+					tinsert(keywords, orGroup)
+				end
+			else
+				-- 单个关键词
+				local word = gsub(rule, "^%s*(.-)%s*$", "%1")
+				if word ~= "" then
+					local upperWord = upper(word)
+					-- 扩展关键词别名
+					local expandedKeywords = ExpandSingleKeyword(upperWord)
+					for _, expandedWord in ipairs(expandedKeywords) do
+						tinsert(keywords, expandedWord)
+					end
+				end
 			end
 		end
 	end
@@ -302,30 +367,42 @@ function Core.MatchKeywords(text)
 	
 	for i, keyword in ipairs(keywords) do
 		if type(keyword) == "string" then
+			-- 简单字符串匹配
 			if find(cleanText, keyword, 1, true) then
 				return true, keyword
 			end
 		elseif type(keyword) == "table" then
-			local allMatch = true
-			for _, subKey in ipairs(keyword) do
-				local isExclude = sub(subKey, 1, 1) == "&"
-				local checkKey = isExclude and sub(subKey, 2) or subKey
-				
-				if isExclude then
-					if find(cleanText, checkKey, 1, true) then
-						allMatch = false
-						break
-					end
-				else
-					if not find(cleanText, checkKey, 1, true) then
-						allMatch = false
-						break
+			-- 检查是否为"或"组
+			if keyword.isOrGroup then
+				-- "或"逻辑：只要匹配其中一个关键词即可
+				for _, orKeyword in ipairs(keyword.keywords) do
+					if find(cleanText, orKeyword, 1, true) then
+						return true, keyword
 					end
 				end
-			end
-			
-			if allMatch then
-				return true, keyword
+			else
+				-- "且"逻辑：必须匹配所有关键词（支持排除）
+				local allMatch = true
+				for _, subKey in ipairs(keyword) do
+					local isExclude = sub(subKey, 1, 1) == "&"
+					local checkKey = isExclude and sub(subKey, 2) or subKey
+					
+					if isExclude then
+						if find(cleanText, checkKey, 1, true) then
+							allMatch = false
+							break
+						end
+					else
+						if not find(cleanText, checkKey, 1, true) then
+							allMatch = false
+							break
+						end
+					end
+				end
+				
+				if allMatch then
+					return true, keyword
+				end
 			end
 		end
 	end
@@ -346,11 +423,19 @@ function Core.HighlightKeyword(msg, matchedKeyword)
 	if type(matchedKeyword) == "string" then
 		tinsert(keywordsToHighlight, matchedKeyword)
 	elseif type(matchedKeyword) == "table" then
-		-- 收集所有非排除的关键词
-		for i = 1, #matchedKeyword do
-			local kw = matchedKeyword[i]
-			if sub(kw, 1, 1) ~= "&" then
+		-- 检查是否为"或"组
+		if matchedKeyword.isOrGroup then
+			-- "或"组：高亮所有匹配到的关键词
+			for _, kw in ipairs(matchedKeyword.keywords) do
 				tinsert(keywordsToHighlight, kw)
+			end
+		else
+			-- "且"组：收集所有非排除的关键词
+			for i = 1, #matchedKeyword do
+				local kw = matchedKeyword[i]
+				if sub(kw, 1, 1) ~= "&" then
+					tinsert(keywordsToHighlight, kw)
+				end
 			end
 		end
 	end
