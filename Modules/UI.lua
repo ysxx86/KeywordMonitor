@@ -165,6 +165,18 @@ function UI.CreateConfigFrame()
 	frame:SetScript("OnDragStart", frame.StartMoving)
 	frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
 	
+	-- 左上角图标
+	local icon = frame:CreateTexture(nil, "ARTWORK")
+	icon:SetSize(32, 32)
+	icon:SetPoint("TOPLEFT", 15, -8)
+	icon:SetTexture("Interface\\Icons\\INV_Misc_Spyglass_03")  -- 望远镜图标，象征监控和搜索
+	
+	-- 图标边框
+	local iconBorder = frame:CreateTexture(nil, "OVERLAY")
+	iconBorder:SetSize(38, 38)
+	iconBorder:SetPoint("CENTER", icon, "CENTER", 0, 0)
+	iconBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+	
 	local title = Utils.CreateFS(frame, 16, "聊天关键词提取过滤", true)
 	title:SetPoint("TOP", 0, -10)
 	
