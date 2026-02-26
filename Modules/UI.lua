@@ -185,7 +185,7 @@ function UI.CreateConfigFrame()
 	versionBtn:SetSize(150, 20)
 	versionBtn:SetPoint("TOPRIGHT", -25, -8)
 	
-	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.1 by 专业打地鼠", false, "RIGHT")
+	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.2 by 专业打地鼠", false, "RIGHT")
 	versionText:SetPoint("RIGHT", 0, 0)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
 	
@@ -205,7 +205,7 @@ function UI.CreateConfigFrame()
 	-- 点击打开欢迎界面
 	versionBtn:SetScript("OnClick", function()
 		if KM.UI and KM.UI.ShowWelcomeDialog then
-			local currentVersion = GetAddOnMetadata("KeywordMonitor", "Version") or "2.0.0"
+			local currentVersion = GetAddOnMetadata("KeywordMonitor", "Version") or "2.0.2"
 			local author = GetAddOnMetadata("KeywordMonitor", "Author") or "专业打地鼠"
 			KM.UI.ShowWelcomeDialog(currentVersion, "", author)  -- 空字符串表示显示首次安装界面
 		end
@@ -1282,9 +1282,8 @@ function UI.ShowWelcomeDialog(currentVersion, lastVersion, author)
 		yOffset = yOffset - 25
 		
 		local updates = {
-			"支持逗号、顿号分隔的关键词作为【或】关系",
-			"例如 Mc,毒蛇 表示匹配 Mc 或 毒蛇 其中任意一个",
-			"优化关键词匹配算法，支持【或】组的智能识别和高亮",
+			"配置界面左上角添加插件图标（望远镜）",
+			"提升视觉效果，界面更加美观专业",
 		}
 		
 		for _, update in ipairs(updates) do
