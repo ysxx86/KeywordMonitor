@@ -185,7 +185,7 @@ function UI.CreateConfigFrame()
 	versionBtn:SetSize(150, 20)
 	versionBtn:SetPoint("TOPRIGHT", -25, -8)
 	
-	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.2 by 专业打地鼠", false, "RIGHT")
+	local versionText = Utils.CreateFS(versionBtn, 9, "v2.0.3 by 专业打地鼠", false, "RIGHT")
 	versionText:SetPoint("RIGHT", 0, 0)
 	versionText:SetTextColor(0.7, 0.7, 0.7)
 	
@@ -205,7 +205,7 @@ function UI.CreateConfigFrame()
 	-- 点击打开欢迎界面
 	versionBtn:SetScript("OnClick", function()
 		if KM.UI and KM.UI.ShowWelcomeDialog then
-			local currentVersion = GetAddOnMetadata("KeywordMonitor", "Version") or "2.0.2"
+			local currentVersion = GetAddOnMetadata("KeywordMonitor", "Version") or "2.0.3"
 			local author = GetAddOnMetadata("KeywordMonitor", "Author") or "专业打地鼠"
 			KM.UI.ShowWelcomeDialog(currentVersion, "", author)  -- 空字符串表示显示首次安装界面
 		end
@@ -1282,8 +1282,9 @@ function UI.ShowWelcomeDialog(currentVersion, lastVersion, author)
 		yOffset = yOffset - 25
 		
 		local updates = {
-			"配置界面左上角添加插件图标（望远镜）",
-			"提升视觉效果，界面更加美观专业",
+			"优化文本清理逻辑，保留空格避免误匹配",
+			"移除高歧义单字别名（鸟、猫、贼、奶）",
+			"保留有意义的组合词别名（鸟德、猫德、奶骑等）",
 		}
 		
 		for _, update in ipairs(updates) do

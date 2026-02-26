@@ -42,120 +42,98 @@ local tinsert = table.insert
 -- 副本缩写映射（经典旧世 + TBC + WLK）
 local RAID_ALIASES = {
 	-- 经典旧世 40人团队副本
-	["MC"] = {"熔火之心", "熔火", "MOLTENCORE"},
-	["熔火之心"] = {"MC", "熔火", "MOLTENCORE"},
-	["熔火"] = {"MC", "熔火之心", "MOLTENCORE"},
+	["MC"] = {"熔火之心", "MOLTENCORE"},
+	["熔火之心"] = {"MC", "MOLTENCORE"},
 	
-	["BWL"] = {"黑翼之巢", "黑翼", "BLACKWINGLAIR"},
-	["黑翼之巢"] = {"BWL", "黑翼", "BLACKWINGLAIR"},
-	["黑翼"] = {"BWL", "黑翼之巢", "BLACKWINGLAIR"},
+	["BWL"] = {"黑翼之巢", "BLACKWINGLAIR"},
+	["黑翼之巢"] = {"BWL", "BLACKWINGLAIR"},
 	
-	["TAQ"] = {"安其拉神殿", "安其拉", "AQ40", "TEMPLEOFAHNQIRAJ"},
-	["AQ40"] = {"安其拉神殿", "安其拉", "TAQ", "TEMPLEOFAHNQIRAJ"},
-	["安其拉神殿"] = {"TAQ", "AQ40", "安其拉", "TEMPLEOFAHNQIRAJ"},
-	["安其拉"] = {"TAQ", "AQ40", "安其拉神殿", "TEMPLEOFAHNQIRAJ"},
+	["TAQ"] = {"安其拉神殿", "AQ40", "TEMPLEOFAHNQIRAJ"},
+	["AQ40"] = {"安其拉神殿", "TAQ", "TEMPLEOFAHNQIRAJ"},
+	["安其拉神殿"] = {"TAQ", "AQ40", "TEMPLEOFAHNQIRAJ"},
 	
-	["NAXX"] = {"纳克萨玛斯", "纳克", "NAXXRAMAS"},
-	["纳克萨玛斯"] = {"NAXX", "纳克", "NAXXRAMAS"},
-	["纳克"] = {"NAXX", "纳克萨玛斯", "NAXXRAMAS"},
+	["NAXX"] = {"纳克萨玛斯", "NAXXRAMAS"},
+	["纳克萨玛斯"] = {"NAXX", "NAXXRAMAS"},
 	
 	-- 经典旧世 20人团队副本
-	["ZG"] = {"祖尔格拉布", "祖格", "ZULGURUB"},
-	["祖尔格拉布"] = {"ZG", "祖格", "ZULGURUB"},
-	["祖格"] = {"ZG", "祖尔格拉布", "ZULGURUB"},
+	["ZG"] = {"祖尔格拉布", "ZULGURUB"},
+	["祖尔格拉布"] = {"ZG", "ZULGURUB"},
 	
-	["AQ20"] = {"安其拉废墟", "废墟", "RUINSOFAHNQIRAJ"},
-	["安其拉废墟"] = {"AQ20", "废墟", "RUINSOFAHNQIRAJ"},
+	["AQ20"] = {"安其拉废墟", "RUINSOFAHNQIRAJ"},
+	["安其拉废墟"] = {"AQ20", "RUINSOFAHNQIRAJ"},
 	
 	-- TBC 25人团队副本
-	["KLZ"] = {"卡拉赞", "卡拉", "KARAZHAN"},
-	["卡拉赞"] = {"KLZ", "卡拉", "KARAZHAN"},
-	["卡拉"] = {"KLZ", "卡拉赞", "KARAZHAN"},
+	["KLZ"] = {"卡拉赞", "KARAZHAN"},
+	["卡拉赞"] = {"KLZ", "KARAZHAN"},
 	
-	["GLR"] = {"格鲁尔的巢穴", "格鲁尔", "GRUULSLAIR"},
-	["格鲁尔的巢穴"] = {"GLR", "格鲁尔", "GRUULSLAIR"},
-	["格鲁尔"] = {"GLR", "格鲁尔的巢穴", "GRUULSLAIR"},
+	["GLR"] = {"格鲁尔的巢穴", "GRUULSLAIR"},
+	["格鲁尔的巢穴"] = {"GLR", "GRUULSLAIR"},
 	
-	["MAG"] = {"玛瑟里顿的巢穴", "玛瑟里顿", "MAGTHERIDON"},
-	["玛瑟里顿的巢穴"] = {"MAG", "玛瑟里顿", "MAGTHERIDON"},
-	["玛瑟里顿"] = {"MAG", "玛瑟里顿的巢穴", "MAGTHERIDON"},
+	["MAG"] = {"玛瑟里顿的巢穴", "MAGTHERIDON"},
+	["玛瑟里顿的巢穴"] = {"MAG", "MAGTHERIDON"},
 	
 	["SSC"] = {"毒蛇神殿", "毒蛇", "SERPENTSHRINECAVERN"},
 	["毒蛇神殿"] = {"SSC", "毒蛇", "SERPENTSHRINECAVERN"},
 	["毒蛇"] = {"SSC", "毒蛇神殿", "SERPENTSHRINECAVERN"},
 	
-	["TK"] = {"风暴要塞", "风暴", "TEMPESTKEEP"},
-	["风暴要塞"] = {"TK", "风暴", "TEMPESTKEEP"},
-	["风暴"] = {"TK", "风暴要塞", "TEMPESTKEEP"},
+	["TK"] = {"风暴要塞", "TEMPESTKEEP"},
+	["风暴要塞"] = {"TK", "TEMPESTKEEP"},
 	
-	["MH"] = {"海加尔山", "海加尔", "MOUNTHYJAL"},
-	["海加尔山"] = {"MH", "海加尔", "MOUNTHYJAL"},
-	["海加尔"] = {"MH", "海加尔山", "MOUNTHYJAL"},
+	["MH"] = {"海加尔山", "MOUNTHYJAL"},
+	["海加尔山"] = {"MH", "MOUNTHYJAL"},
 	
-	["BT"] = {"黑暗神殿", "黑庙", "BLACKTEMPLE"},
-	["黑暗神殿"] = {"BT", "黑庙", "BLACKTEMPLE"},
-	["黑庙"] = {"BT", "黑暗神殿", "BLACKTEMPLE"},
+	["BT"] = {"黑暗神殿", "BLACKTEMPLE"},
+	["黑暗神殿"] = {"BT", "BLACKTEMPLE"},
 	
 	["ZAM"] = {"祖阿曼", "ZA", "ZULAMANM"},
 	["ZA"] = {"祖阿曼", "ZAM", "ZULAMANM"},
 	["祖阿曼"] = {"ZAM", "ZA", "ZULAMANM"},
 	
-	["SW"] = {"太阳之井高地", "太阳井", "SUNWELL"},
-	["太阳之井高地"] = {"SW", "太阳井", "SUNWELL"},
-	["太阳井"] = {"SW", "太阳之井高地", "SUNWELL"},
+	["SW"] = {"太阳之井高地", "SUNWELL"},
+	["太阳之井高地"] = {"SW", "SUNWELL"},
 	
 	-- WLK 团队副本
-	["NAXX"] = {"纳克萨玛斯", "纳克", "NAXXRAMAS"},
+	["OBS"] = {"黑曜石圣殿", "OBSIDIANSANCTUM"},
+	["黑曜石圣殿"] = {"OBS", "OBSIDIANSANCTUM"},
 	
-	["OBS"] = {"黑曜石圣殿", "黑曜石", "OBSIDIANSANCTUM"},
-	["黑曜石圣殿"] = {"OBS", "黑曜石", "OBSIDIANSANCTUM"},
-	["黑曜石"] = {"OBS", "黑曜石圣殿", "OBSIDIANSANCTUM"},
+	["EOE"] = {"永恒之眼", "EYEOFETERNITY"},
+	["永恒之眼"] = {"EOE", "EYEOFETERNITY"},
 	
-	["EOE"] = {"永恒之眼", "永恒", "EYEOFETERNITY"},
-	["永恒之眼"] = {"EOE", "永恒", "EYEOFETERNITY"},
-	["永恒"] = {"EOE", "永恒之眼", "EYEOFETERNITY"},
+	["ULD"] = {"奥杜尔", "ULDUAR"},
+	["奥杜尔"] = {"ULD", "ULDUAR"},
 	
-	["ULD"] = {"奥杜尔", "奥都", "ULDUAR"},
-	["奥杜尔"] = {"ULD", "奥都", "ULDUAR"},
-	["奥都"] = {"ULD", "奥杜尔", "ULDUAR"},
+	["TOC"] = {"十字军试炼", "TRIALOFTHECRUSADER"},
+	["十字军试炼"] = {"TOC", "TRIALOFTHECRUSADER"},
 	
-	["TOC"] = {"十字军试炼", "十字军", "TRIALOFTHECRUSADER"},
-	["十字军试炼"] = {"TOC", "十字军", "TRIALOFTHECRUSADER"},
-	["十字军"] = {"TOC", "十字军试炼", "TRIALOFTHECRUSADER"},
+	["ICC"] = {"冰冠堡垒", "ICECROWNCITADEL"},
+	["冰冠堡垒"] = {"ICC", "ICECROWNCITADEL"},
 	
-	["ICC"] = {"冰冠堡垒", "冰冠", "ICECROWNCITADEL"},
-	["冰冠堡垒"] = {"ICC", "冰冠", "ICECROWNCITADEL"},
-	["冰冠"] = {"ICC", "冰冠堡垒", "ICECROWNCITADEL"},
-	
-	["RS"] = {"红玉圣殿", "红玉", "RUBYSANCTUM"},
-	["红玉圣殿"] = {"RS", "红玉", "RUBYSANCTUM"},
-	["红玉"] = {"RS", "红玉圣殿", "RUBYSANCTUM"},
+	["RS"] = {"红玉圣殿", "RUBYSANCTUM"},
+	["红玉圣殿"] = {"RS", "RUBYSANCTUM"},
 }
 
 -- 职业缩写映射
 local CLASS_ALIASES = {
 	-- 战士
-	["ZS"] = {"战士", "战", "WARRIOR"},
-	["战士"] = {"ZS", "战", "WARRIOR"},
+	["ZS"] = {"战士", "WARRIOR"},
+	["战士"] = {"ZS", "WARRIOR"},
 	
 	-- 圣骑士
-	["QS"] = {"圣骑士", "骑士", "圣骑", "PALADIN"},
-	["圣骑士"] = {"QS", "骑士", "圣骑", "PALADIN"},
-	["圣骑"] = {"QS", "圣骑士", "骑士", "PALADIN"},
-	["骑士"] = {"QS", "圣骑士", "圣骑", "PALADIN"},
+	["QS"] = {"圣骑士", "圣骑", "PALADIN"},
+	["圣骑士"] = {"QS", "圣骑", "PALADIN"},
+	["圣骑"] = {"QS", "圣骑士", "PALADIN"},
 	
 	-- 猎人
-	["LR"] = {"猎人", "猎", "HUNTER"},
-	["猎人"] = {"LR", "猎", "HUNTER"},
+	["LR"] = {"猎人", "HUNTER"},
+	["猎人"] = {"LR", "HUNTER"},
 	
-	-- 盗贼
-	["DZ"] = {"盗贼", "贼", "ROGUE"},
-	["盗贼"] = {"DZ", "贼", "ROGUE"},
-	["贼"] = {"DZ", "盗贼", "ROGUE"},
+	-- 盗贼（移除单字"贼"，避免误匹配日常用语如"贼好"）
+	["DZ"] = {"盗贼", "ROGUE"},
+	["盗贼"] = {"DZ", "ROGUE"},
 	
 	-- 牧师
-	["MS"] = {"牧师", "牧", "PRIEST"},
-	["牧师"] = {"MS", "牧", "PRIEST"},
+	["MS"] = {"牧师", "PRIEST"},
+	["牧师"] = {"MS", "PRIEST"},
 	
 	-- 萨满祭司
 	["SM"] = {"萨满祭司", "萨满", "SHAMAN"},
@@ -163,16 +141,15 @@ local CLASS_ALIASES = {
 	["萨满"] = {"SM", "萨满祭司", "SHAMAN"},
 	
 	-- 法师
-	["FS"] = {"法师",  "MAGE"},
+	["FS"] = {"法师", "MAGE"},
 	["法师"] = {"FS", "MAGE"},
 	
 	-- 术士
-	["SS"] = {"术士", "术", "WARLOCK"},
-	["术士"] = {"SS", "术", "WARLOCK"},
-	["术"] = {"SS", "术士", "WARLOCK"},
+	["SS"] = {"术士", "WARLOCK"},
+	["术士"] = {"SS", "WARLOCK"},
 	
 	-- 德鲁伊
-	["XD"] = {"德鲁伊","小德", "DRUID"},
+	["XD"] = {"德鲁伊", "小德", "DRUID"},
 	["德鲁伊"] = {"XD", "小德", "DRUID"},
 	["小德"] = {"XD", "德鲁伊", "DRUID"},
 	
@@ -182,20 +159,19 @@ local CLASS_ALIASES = {
 	["死骑"] = {"DK", "死亡骑士", "DEATHKNIGHT"},
 }
 
--- 角色定位缩写映射
+-- 角色定位缩写映射（移除单字"奶"，避免误匹配日常用语）
 local ROLE_ALIASES = {
 	-- 坦克
-	["T"] = {"坦克", "T", "TANK"},
+	["T"] = {"坦克", "TANK"},
 	["坦克"] = {"T", "TANK"},
 	
-	-- 治疗
-	["N"] = {"治疗", "奶", "奶妈", "HEALER"},
-	["奶"] = {"N", "治疗", "奶妈", "HEALER"},
-	["治疗"] = {"N", "奶", "奶妈", "HEALER"},
-	["奶妈"] = {"N", "治疗", "奶", "HEALER"},
+	-- 治疗（移除单字"奶"）
+	["N"] = {"治疗", "奶妈", "HEALER"},
+	["治疗"] = {"N", "奶妈", "HEALER"},
+	["奶妈"] = {"N", "治疗", "HEALER"},
 	
 	-- 输出
-	["DPS"] = {"输出",  "DAMAGE"},
+	["DPS"] = {"输出", "DAMAGE"},
 	["输出"] = {"DPS", "DAMAGE"},
 }
 
@@ -227,15 +203,13 @@ local CLASS_ROLE_ALIASES = {
 	["熊T"] = {"YD", "野德", "熊坦", "坦克德鲁伊"},
 	["熊坦"] = {"YD", "野德", "熊T", "坦克德鲁伊"},
 	
-	-- 鸟德
-	["鸟德"] = {"平衡德", "平衡德鲁伊", "鸟", "输出德鲁伊"},
-	["平衡德"] = {"鸟德", "平衡德鲁伊","鸟", "输出德鲁伊"},
-	["鸟"] = {"鸟德", "平衡德鲁伊", "输出德鲁伊","鸟"},
+	-- 鸟德（移除单字"鸟"，避免误匹配日常用语）
+	["鸟德"] = {"平衡德", "平衡德鲁伊", "输出德鲁伊"},
+	["平衡德"] = {"鸟德", "平衡德鲁伊", "输出德鲁伊"},
 	
-	-- 猫德
-	["猫德"] = {"野性德", "野性德鲁伊", "猫","近战德鲁伊"},
-	["野性德"] = {"猫德", "野性德鲁伊", "猫","近战德鲁伊"},
-	["猫"] = {"猫德", "野性德鲁伊", "近战德鲁伊","猫"},
+	-- 猫德（移除单字"猫"，避免误匹配日常用语）
+	["猫德"] = {"野性德", "野性德鲁伊", "近战德鲁伊"},
+	["野性德"] = {"猫德", "野性德鲁伊", "近战德鲁伊"},
 	
 	-- 奶萨
 	["NS"] = {"奶萨", "奶萨满", "治疗萨满", "恢复萨"},
@@ -354,12 +328,6 @@ local MISC_ALIASES = {
 	["金团"] = {"G团", "GDKP"},
 	["GDKP"] = {"G团", "金团"},
 	
-	
-	-- 组队相关
-	["来"] = {"M", "密我", "来人"},
-	["M"] = {"来", "密我", "来人"},
-	["密我"] = {"M", "来", "来人"},
-	
 	-- 装等相关
 	["GS"] = {"装等", "装备等级", "GEARSCORE"},
 	["装等"] = {"GS", "装备等级", "GEARSCORE"},
@@ -372,6 +340,7 @@ local MISC_ALIASES = {
 	-- 其他常见
 	["FB"] = {"副本", "DUNGEON"},
 	["副本"] = {"FB", "DUNGEON"},
+	["YX"] = {"英雄", "英雄副本"},
 	["英雄"] = {"YX", "英雄副本"},
 	["PT"] = {"普通", "普通副本"},
 	["普通"] = {"PT", "普通副本"},

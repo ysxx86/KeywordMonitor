@@ -108,12 +108,13 @@ local STANDARD_TEXT_FONT = STANDARD_TEXT_FONT
 
 -- 清理文本中的特殊字符（优化版 - 减少gsub调用）
 -- @param text string 要清理的文本
--- @return string 清理后的文本（大写，移除颜色代码、链接、标点和空格）
+-- @return string 清理后的文本（大写，移除颜色代码、链接、标点，但保留空格）
 function Utils.CleanText(text)
 	if not text then return "" end
-	-- 合并多个gsub操作，减少字符串创建
-	text = gsub(text, "|[HhTtCcRr][^|]*|[hHtT]", "")  -- 移除所有颜色和链接代码
-	text = gsub(text, "[%p%s]", "")  -- 移除标点和空格
+	-- 移除颜色代码和链接
+	text = gsub(text, "|[HhTtCcRr][^|]*|[hHtT]", "")
+	-- 只移除标点符号，保留空格（这样可以避免"萨 满"匹配"萨满"）
+	text = gsub(text, "[%p]", "")
 	return upper(text)
 end
 
