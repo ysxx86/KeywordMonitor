@@ -818,6 +818,8 @@ function Core.CreateKeywordFrame()
 	frame:SetHyperlinksEnabled(true)
 	frame:EnableMouse(true)
 	frame:EnableMouseWheel(true)
+	frame:SetMovable(true)
+	frame:SetClampedToScreen(true)
 	
 	-- 设置字体（继承聊天框架的字体）
 	local fontPath, fontSize = ChatFrame1:GetFont()
@@ -827,6 +829,32 @@ function Core.CreateKeywordFrame()
 	
 	-- 创建背景（使用 Utils 模块的函数）
 	Utils.CreateBD(frame)
+	
+	-- 恢复保存的位置
+	if KeywordMonitorDB.KeywordFramePos then
+		frame:ClearAllPoints()
+		frame:SetPoint(KeywordMonitorDB.KeywordFramePos.point, UIParent, KeywordMonitorDB.KeywordFramePos.relativePoint, 
+			KeywordMonitorDB.KeywordFramePos.x, KeywordMonitorDB.KeywordFramePos.y)
+	end
+	
+	-- Shift+拖拽移动功能
+	frame:RegisterForDrag("LeftButton")
+	frame:SetScript("OnDragStart", function(self)
+		if IsShiftKeyDown() then
+			self:StartMoving()
+		end
+	end)
+	frame:SetScript("OnDragStop", function(self)
+		self:StopMovingOrSizing()
+		-- 保存位置
+		local point, _, relativePoint, x, y = self:GetPoint()
+		KeywordMonitorDB.KeywordFramePos = {
+			point = point,
+			relativePoint = relativePoint,
+			x = x,
+			y = y
+		}
+	end)
 	
 	-- 创建滚动到底部按钮
 	local scrollBtn = CreateFrame("Button", nil, frame)
@@ -869,6 +897,18 @@ function Core.CreateKeywordFrame()
 				scrollBtn:Hide()
 			end
 		end
+	end)
+	
+	-- 鼠标悬停提示
+	frame:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:AddLine("关键词监控窗口", 1, 1, 1)
+		GameTooltip:AddLine("|cffFFFF00Shift+拖拽|r - 移动窗口", 0.7, 0.7, 0.7)
+		GameTooltip:AddLine("|cff00FFff滚轮|r - 滚动消息", 0.7, 0.7, 0.7)
+		GameTooltip:Show()
+	end)
+	frame:SetScript("OnLeave", function(self)
+		GameTooltip:Hide()
 	end)
 	
 	-- 初始隐藏窗口

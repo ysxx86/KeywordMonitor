@@ -4,7 +4,7 @@
 ## Notes: 聊天关键词提取过滤插件
 ## Notes-enUS: Chat keyword extraction and filtering
 ## Author: 专业打地鼠
-## Version: 2.0.3
+## Version: 2.0.4
 ## SavedVariables: KeywordMonitorDB
 
 # 模块加载顺序 (按依赖关系排序)
