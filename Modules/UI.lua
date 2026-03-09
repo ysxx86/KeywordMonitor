@@ -84,11 +84,10 @@ local IsAddOnLoaded = IsAddOnLoaded
 
 -- 玩家和单位函数
 local Ambiguate, IsShiftKeyDown, UnitName = Ambiguate, IsShiftKeyDown, UnitName
-local GetPlayerInfoByGUID = GetPlayerInfoByGUID
 local GetColoredName, GetPlayerLink = GetColoredName, GetPlayerLink
 
--- C_API 函数
-local C_Timer, C_FriendList, C_BattleNet = C_Timer, C_FriendList, C_BattleNet
+-- C_API 函数（经典旧世版本）
+local C_Timer = C_Timer
 
 -- UI 框架函数
 local CreateFrame = CreateFrame

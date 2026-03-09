@@ -90,15 +90,13 @@ local SOUNDKIT = SOUNDKIT
 
 -- 玩家和单位函数
 local Ambiguate, IsShiftKeyDown, UnitName = Ambiguate, IsShiftKeyDown, UnitName
-local GetPlayerInfoByGUID = GetPlayerInfoByGUID
 local GetColoredName, GetPlayerLink = GetColoredName, GetPlayerLink
 
--- C_API 函数
-local C_Timer, C_FriendList, C_BattleNet = C_Timer, C_FriendList, C_BattleNet
+-- C_API 函数（经典旧世版本）
+local C_Timer = C_Timer
 
--- 战网好友函数
-local BNGetNumFriends, BNGetFriendInfoByID = BNGetNumFriends, BNGetFriendInfoByID
-local BNET_CLIENT_WOW = BNET_CLIENT_WOW
+-- 好友函数（经典旧世版本）
+local GetNumFriends, GetFriendInfo = GetNumFriends, GetFriendInfo
 
 -- UI 框架函数
 local CreateFrame = CreateFrame
@@ -485,28 +483,17 @@ function Core.IsFriend(name)
 		-- 刷新好友缓存
 		wipe(friendCache)
 		
-		-- 获取 WoW 好友列表
-		local numOnline = C_FriendList.GetNumOnlineFriends()
-		for i = 1, numOnline do
-			local info = C_FriendList.GetFriendInfoByIndex(i)
-			if info and info.name then
-				friendCache[info.name] = true
+		-- 获取 WoW 好友列表（经典旧世兼容版本）
+		-- 经典旧世使用 GetNumFriends() 和 GetFriendInfo()
+		local numFriends = GetNumFriends()
+		for i = 1, numFriends do
+			local friendName = GetFriendInfo(i)
+			if friendName then
+				friendCache[friendName] = true
 			end
 		end
 		
-		-- 获取战网好友列表
-		local _, numBNetOnline = BNGetNumFriends()
-		for i = 1, numBNetOnline do
-			local numGameAccounts = C_BattleNet.GetFriendNumGameAccounts(i)
-			for j = 1, numGameAccounts do
-				local gameAccountInfo = C_BattleNet.GetFriendGameAccountInfo(i, j)
-				if gameAccountInfo and gameAccountInfo.clientProgram == BNET_CLIENT_WOW then
-					if gameAccountInfo.characterName then
-						friendCache[gameAccountInfo.characterName] = true
-					end
-				end
-			end
-		end
+		-- 注意：经典旧世没有战网好友功能，跳过战网好友检测
 		
 		-- 更新缓存时间
 		friendCacheTime = currentTime

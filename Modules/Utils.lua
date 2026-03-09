@@ -68,15 +68,13 @@ local SOUNDKIT = SOUNDKIT
 
 -- 玩家和单位函数
 local Ambiguate, IsShiftKeyDown, UnitName = Ambiguate, IsShiftKeyDown, UnitName
-local GetPlayerInfoByGUID = GetPlayerInfoByGUID
 local GetColoredName, GetPlayerLink = GetColoredName, GetPlayerLink
 
--- C_API 函数
-local C_Timer, C_FriendList, C_BattleNet = C_Timer, C_FriendList, C_BattleNet
+-- C_API 函数（经典旧世版本）
+local C_Timer = C_Timer
 
--- 战网好友函数
-local BNGetNumFriends, BNGetFriendInfoByID = BNGetNumFriends, BNGetFriendInfoByID
-local BNET_CLIENT_WOW = BNET_CLIENT_WOW
+-- 好友函数（经典旧世版本）
+local GetNumFriends, GetFriendInfo = GetNumFriends, GetFriendInfo
 
 -- UI 框架函数
 local CreateFrame = CreateFrame
